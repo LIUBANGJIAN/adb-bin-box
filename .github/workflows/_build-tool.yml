@@ -96,10 +96,10 @@ jobs:
           status="${PIPESTATUS[0]}"
           if [ "$status" -ne 0 ]; then
             echo "::error::build failed status=$status tool=${{ inputs.tool_id }} abi=${{ inputs.abi }}"
-            printf '::error::log tail 50: %s\n' \
-              "$(tail -n 50 "$LOG" | sed -e 's/%/%25/g' -e 's/\r$//' | cut -c1-400 | awk 'BEGIN{ORS="%0A"}{print}')"
-            printf '::error::error lines: %s\n' \
-              "$(grep -n -i -E 'error|undefined reference|cannot|No such file|not found' "$LOG" | tail -n 25 | sed -e 's/%/%25/g' -e 's/\r$//' | cut -c1-400 | awk 'BEGIN{ORS="%0A"}{print}')"
+            printf '::error::error lines:%s\n' \
+              "$(grep -n -E ':[0-9]+:[0-9]+: (error|fatal error):|error: |Error [0-9]+$|undefined reference|cannot find -|No such file or directory' "$LOG" | tail -n 16 | cut -c1-220 | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'BEGIN{ORS="%0A"}{print}')"
+            printf '::error::log tail:%s\n' \
+              "$(tail -n 18 "$LOG" | cut -c1-200 | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'BEGIN{ORS="%0A"}{print}')"
           fi
           exit "$status"
 
