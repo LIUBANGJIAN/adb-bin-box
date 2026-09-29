@@ -21,6 +21,7 @@ __pycache__/
 
 # ---- local CI-debug scratch (never commit; may contain transient secrets) --
 _ci/
+_repro/
 _*.txt
 _*.log
 _*.json

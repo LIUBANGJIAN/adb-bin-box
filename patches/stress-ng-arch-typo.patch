@@ -1,0 +1,20 @@
+--- a/core-helper.c
++++ b/core-helper.c
+@@ -760,7 +760,7 @@
+ 	}
+ #else
+ 	pr_dbg("system: %s, %s, %s, %s\n",
+-		stress_get_arch(),
++		stress_arch_get(),
+ 		stress_compiler_get(),
+ 		stress_libc_version_get(),
+ 		stress_endian_str());
+@@ -834,7 +834,7 @@
+ 		pr_yaml(yaml, "      machine: '%s'\n", uts.machine);
+ 	}
+ #else
+-	pr_yaml(yaml, "      machine: '%s'\n", stress_get_arch());
++	pr_yaml(yaml, "      machine: '%s'\n", stress_arch_get());
+ #endif
+ 	pr_yaml(yaml, "      compiler: '%s'\n", stress_compiler_get());
+ 	pr_yaml(yaml, "      libc: '%s'\n", stress_libc_version_get());

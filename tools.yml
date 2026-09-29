@@ -148,6 +148,14 @@ tools:
     build_system: autotools
     tier: 0
     bin: strace
+    # strace's build generates an `ioctlsort` helper that MUST be *executed* at
+    # build time (src/Makefile.am: `ioctlent%.h: ioctlsort%` -> `./$< > $@`).
+    # AX_PROG_CC_FOR_BUILD wants a HOST compiler for such build-time tools, but
+    # our CC is `zig cc -target <phone-triple>` and CC_FOR_BUILD was unset.
+    # Pin a native host compiler. (UNVERIFIED assumption -- if strace still
+    # fails, read the CI annotations for the real error.)
+    env:
+      CC_FOR_BUILD: gcc
     configure:
       flags:
         - "--enable-static"
@@ -182,6 +190,12 @@ tools:
     build_system: make
     tier: 1
     bin: stress-ng
+    # Upstream typo: core-helper.c calls stress_get_arch(), which is defined
+    # nowhere; the real name is stress_arch_get() (core-arch.c:21). Both call
+    # sites sit in the `#else` of `#if defined(HAVE_UNAME) &&
+    # defined(HAVE_SYS_UTSNAME_H)`, so upstream's normal Linux build never
+    # compiles them -- our cross build (feature undefined) does. Fix word order.
+    patches: ["stress-ng-arch-typo.patch"]
     configure: {}
     make:
       targets: ["all"]
