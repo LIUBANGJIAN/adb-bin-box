@@ -37,6 +37,11 @@ jobs:
           echo "matrix count = $count"
           python build/gen/manifest.py validate --tools tools.yml --deps deps.yml
 
+      # Pure bash + python, no toolchain: covers the `uapi_include` -> `-I`
+      # expansion and the build.sh landing gate (see the script's header).
+      - name: Bash unit test (bundled UAPI -I mechanism)
+        run: bash build/tests/test_uapi_include.sh
+
       - name: JSON syntax
         run: |
           python -m json.tool build/gen/schema.json > /dev/null

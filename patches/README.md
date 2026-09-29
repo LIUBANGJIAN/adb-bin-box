@@ -19,7 +19,8 @@ The build engine applies every listed patch to the *unpacked source tree*
 
 ## Current status
 
-Three patches are currently in use (each `tools.yml` entry lists its own):
+Four patches are currently in use (each `tools.yml` entry lists its own, in
+apply order):
 
 - `stress-ng-arch-typo.patch` — upstream's `core-helper.c` calls
   `stress_get_arch()`, but the real function is `stress_arch_get()`; the broken
@@ -30,6 +31,15 @@ Three patches are currently in use (each `tools.yml` entry lists its own):
   `--allow-multiple-definition`, so no form of the flag reaches the linker
   through `zig cc`.  The patch removes it and adds `-fcommon` (the compile-time
   equivalent for tentative definitions) as a safety net.
+- `stress-ng-memthrash-macro-parens.patch` — `stress-memthrash.c`'s fallback
+  macros omit the parentheses around `addr` (`(*addr)` and
+  `(*addr) = (val)`), but every call site passes an expression (`ptr + 6`).
+  Since macro expansion is textual, `MEMTHRASH_STORE128(ptr + 6, r6)` expands to
+  `*ptr + 6 = r6` → `expression is not assignable`.  Only `x86_64` reaches that
+  fallback (it is the only target with `HAVE_INT128_T` +
+  `HAVE_ASM_X86_MOVNTDQA` but no `HAVE_NT_STORE128`).  The `MEMTHRASH_LOAD128`
+  fallback has the same defect and read from the wrong address.  Both lines get
+  the missing parentheses; the call sites are left alone.
 - `strace-bundled-btrfs-include.patch` — `src/btrfs.c` must include strace's
   bundled UAPI headers (`bundled/linux/include/uapi/linux/btrfs.h` and
   `btrfs_tree.h`) by quoted relative path, because zig's own older

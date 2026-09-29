@@ -158,15 +158,11 @@ apply_patches "$SRC_DIR" "${PATCHES[@]+"${PATCHES[@]}"}"
 # --------------------------------------------------------------------------- #
 # 4. Environment (Zig contract) + per-tool env                                #
 # --------------------------------------------------------------------------- #
+# setup_zig_env() also prepends the manifest's `uapi_include` roots (strace's
+# bundled Linux UAPI tree) to CPPFLAGS as `-I`, which is what actually wins the
+# <linux/*.h> lookup against zig's own older, builtin copies.
 apply_kv TOOL_ENV_KV
 setup_zig_env
-
-# --------------------------------------------------------------------------- #
-# 4b. De-shadow zig's (older) Linux UAPI with the tool's fresh bundled copy     #
-# --------------------------------------------------------------------------- #
-# No-op unless the manifest declares `uapi_fresh` (currently only strace, whose
-# bundled linux/sched.h is newer than zig's and must win to define CLONE_AUTOREAP).
-mirror_fresh_uapi ${UAPI_FRESH[@]+"${UAPI_FRESH[@]}"}
 
 # --------------------------------------------------------------------------- #
 # 5. Build via the build-system driver                                        #
@@ -179,6 +175,17 @@ DRIVER_FILE="$SYSTEMS_DIR/$BUILD_SYSTEM.sh"
 run_commands "$SRC_DIR" "${HOOK_PRE_CONFIGURE[@]+"${HOOK_PRE_CONFIGURE[@]}"}"
 driver_configure
 run_commands "$BUILD_DIR" "${HOOK_POST_CONFIGURE[@]+"${HOOK_POST_CONFIGURE[@]}"}"
+
+# --------------------------------------------------------------------------- #
+# 5b. UAPI -I landing gate                                                    #
+# --------------------------------------------------------------------------- #
+# Exporting CPPFLAGS is an intent, not evidence: configure is free to rewrite or
+# drop it.  Since the missing flag only shows up much later as a confusing
+# "use of undeclared identifier", assert it reached the generated Makefile —
+# and assert the `-I` SPELLING, because the `-isystem` flags strace's configure
+# adds by itself carry the very same path (see require_uapi_include_landed).
+# No-op for every tool that does not declare `uapi_include`.
+require_uapi_include_landed "$BUILD_DIR" ${UAPI_INCLUDE[@]+"${UAPI_INCLUDE[@]}"}
 run_commands "$BUILD_DIR" "${HOOK_PRE_BUILD[@]+"${HOOK_PRE_BUILD[@]}"}"
 driver_build
 run_commands "$BUILD_DIR" "${HOOK_POST_BUILD[@]+"${HOOK_POST_BUILD[@]}"}"

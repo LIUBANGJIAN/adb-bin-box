@@ -1,0 +1,18 @@
+--- a/stress-memthrash.c
++++ b/stress-memthrash.c
+@@ -349,13 +349,13 @@
+ #if defined(HAVE_INT128_T) && defined(HAVE_ASM_X86_MOVNTDQA)
+ #define MEMTHRASH_LOAD128(addr)		stress_asm_movntdqa((addr))
+ #else
+-#define MEMTHRASH_LOAD128(addr)		(*addr)
++#define MEMTHRASH_LOAD128(addr)		(*(addr))
+ #endif
+ 
+ #if defined(HAVE_NT_STORE128)
+ #define MEMTHRASH_STORE128(addr, val) 	stress_nt_store128((addr), (val))
+ #else
+-#define MEMTHRASH_STORE128(addr, val)	(*addr) = (val)
++#define MEMTHRASH_STORE128(addr, val)	(*(addr)) = (val)
+ #endif
+ 
+ #if defined(HAVE_INT128_T) &&		\

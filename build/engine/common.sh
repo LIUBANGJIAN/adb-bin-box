@@ -227,10 +227,24 @@ setup_zig_env() {
   export STRIP="${strip:-true}"
   export NM="$(command -v llvm-nm || command -v nm || echo true)"
 
+  # Bundled Linux UAPI roots (UAPI_INCLUDE, relative to $SRC_DIR) are handed to
+  # the compiler as plain `-I` here, ahead of everything else.  Measured with
+  # `zig cc -E -v`: the *user* `-I` group is searched BEFORE zig's builtin libc
+  # dirs, while the user `-isystem` group is searched AFTER them.  That ordering
+  # is exactly why strace's configure — which injects its bundled UAPI tree only
+  # as `-isystem` (upstream "use -isystem instead of -I for bundled Linux UAPI
+  # headers", 2024-10-26, a warning-suppression change) — could not un-shadow
+  # zig's stale <linux/sched.h> and died on the undeclared CLONE_AUTOREAP.
+  uapi_include_flags "$SRC_DIR" ${UAPI_INCLUDE[@]+"${UAPI_INCLUDE[@]}"}
+  local uapi_cppflags=""
+  if [ "${#UAPI_INCLUDE_FLAGS[@]}" -gt 0 ]; then
+    uapi_cppflags=" ${UAPI_INCLUDE_FLAGS[*]}"
+  fi
+
   export CFLAGS="${CFLAGS:-${DEFAULT_CFLAGS:-$DEFAULT_CFLAGS_DEFAULT}}"
   export CXXFLAGS="${CXXFLAGS:-$CFLAGS}"
   export LDFLAGS="${LDFLAGS:+$LDFLAGS }-static -L$PREFIX/lib"
-  export CPPFLAGS="-I$PREFIX/include ${CPPFLAGS:-}"
+  export CPPFLAGS="-I$PREFIX/include$uapi_cppflags ${CPPFLAGS:-}"
   export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
   export PKG_CONFIG="pkg-config --static"
   export CONFIG_SITE="$BUILD_DIR/config.site"
@@ -244,86 +258,76 @@ setup_zig_env() {
 }
 
 # --------------------------------------------------------------------------- #
-# Linux UAPI de-shadowing (system_design.md §3.6 addendum)                     #
+# Bundled Linux UAPI de-shadowing (system_design.md §3.6 addendum)             #
 # --------------------------------------------------------------------------- #
-# mirror_fresh_uapi <fresh_root> [<fresh_root> ...]
+# The `-I` regex that must show up in the generated Makefile once configure has
+# run.  It deliberately requires the `-I` spelling: the `-isystem` flags that
+# strace's configure adds by itself contain the very same path, so matching the
+# bare path substring would make the landing gate pass unconditionally.
+UAPI_INCLUDE_GATE_RE='-I[^ ]*bundled/linux/include/uapi'
+
+# uapi_include_flags <src_dir> [<root> ...]
+#
+# Turns the manifest's `uapi_include` roots (relative to <src_dir>) into
+# `-I<abs>` entries in the global UAPI_INCLUDE_FLAGS array, for setup_zig_env()
+# to prepend to CPPFLAGS.
 #
 # Some tools ship a *newer* snapshot of the Linux UAPI headers than the one zig
 # 0.16.0 bundles.  strace is the canonical case: its build needs CLONE_AUTOREAP
-# (defined in its bundled linux/sched.h, kernel 7.x) but zig's own copy of
-# linux/sched.h predates it.  `configure` already puts the bundled roots on the
-# compiler search path, but only as `-isystem`, and with that ordering zig's own
-# libc copy still won the lookup (measured: "use of undeclared identifier
-# 'CLONE_AUTOREAP'" survived those flags).  Rather than depend on include-path
-# ordering, MIRROR the fresh files straight over zig's copies — order-independent
-# and therefore the only reliable fix.
+# (bundled linux/sched.h) while zig's own copy predates it, and configure only
+# offers its bundled tree as `-isystem`, which loses to zig's builtin dirs.
+# A plain `-I` wins that lookup (see setup_zig_env), so the roots are passed
+# that way instead of being copied over the zig installation.
 #
-# Each <fresh_root> is relative to $SRC_DIR.  A root that does not exist (e.g.
-# strace bundles no arch/x86 UAPI tree) is skipped with a warning; if NOTHING
-# is mirrored at all we die, so a broken path can never silently no-op.
-mirror_fresh_uapi() {
+# Root #0 is the anchor and MUST exist: a typo there would otherwise degrade
+# into a confusing "undeclared identifier" much later.  Every further root is
+# best-effort and silently skipped when absent — strace 7.2 only ships
+# arch/arm64/include/uapi, so `${karch}` roots for arm/x86 legitimately vanish.
+uapi_include_flags() {
+  local src_dir="$1"; shift
+  UAPI_INCLUDE_FLAGS=()
   [ "$#" -gt 0 ] || return 0
-  local zig_bin="${ZIG_BIN:-$(command -v zig || true)}"
-  [ -n "$zig_bin" ] || die "mirror_fresh_uapi: zig not found (ZIG_BIN unset)"
-  local py
-  py="$(resolve_python)"
-
-  # `zig env` prints zig-object syntax (`.lib_dir = "..."`), not JSON — match
-  # either form with a tolerant regex so this survives a future format change.
-  local lib_dir
-  lib_dir="$("$zig_bin" env 2>/dev/null | "$py" -c '
-import re, sys
-m = re.search(r"lib_dir\"?\s*[:=]\s*\"([^\"]+)\"", sys.stdin.read())
-sys.stdout.write(m.group(1) if m else "")
-' || true)"
-  [ -n "$lib_dir" ] || die "mirror_fresh_uapi: could not read lib_dir from 'zig env'"
-  local inc="$lib_dir/libc/include"
-  [ -d "$inc" ] || die "mirror_fresh_uapi: zig libc include dir not found: $inc"
-
-  local total_over=0 total_add=0
-  local root fresh rel dest_dir parent
+  local idx=0 root dir
   for root in "$@"; do
     [ -n "$root" ] || continue
-    fresh="$SRC_DIR/$root"
-    if [ ! -d "$fresh" ]; then
-      warn "mirror_fresh_uapi: root absent, skipping: $root"
-      continue
+    dir="$src_dir/$root"
+    if [ -d "$dir" ]; then
+      UAPI_INCLUDE_FLAGS+=("-I$dir")
+    elif [ "$idx" -eq 0 ]; then
+      die "bundled UAPI anchor root does not exist: $dir"
     fi
-    local n_over=0 n_add=0
-    while IFS= read -r rel; do
-      [ -n "$rel" ] || continue
-      for dest_dir in "$inc"/*/; do
-        [ -d "$dest_dir" ] || continue
-        if [ -e "${dest_dir}${rel}" ]; then
-          cp -f "$fresh/$rel" "${dest_dir}${rel}"
-          n_over=$((n_over + 1))
-        else
-          parent="$(dirname "${dest_dir}${rel}")"
-          # Only add into a directory that already carries this header family;
-          # an empty dir (e.g. an unused asm/ stub) is never populated, so the
-          # generic "any" tree is not polluted with arch-specific headers.
-          if [ -d "$parent" ] && [ -n "$(ls -A "$parent" 2>/dev/null || true)" ]; then
-            cp -f "$fresh/$rel" "${dest_dir}${rel}"
-            n_add=$((n_add + 1))
-          fi
-        fi
-      done
-    done < <(cd "$fresh" && find . -type f | sed 's|^\./||' | sort)
-    if [ "$((n_over + n_add))" -eq 0 ]; then
-      warn "mirror_fresh_uapi: root matched nothing in zig's include tree: $root"
-    fi
-    total_over=$((total_over + n_over))
-    total_add=$((total_add + n_add))
-    log "mirror_fresh_uapi: $root -> overridden=$n_over added=$n_add"
+    idx=$((idx + 1))
   done
-
-  [ "$((total_over + total_add))" -gt 0 ] \
-    || die "mirror_fresh_uapi: nothing mirrored (no fresh UAPI matched zig's include tree)"
-  log "mirror_fresh_uapi: done overridden=$total_over added=$total_add"
-
-  # Evidence line: prove the exact header the strace build tripped over is fresh.
-  local probe="$inc/any-linux-any/linux/sched.h"
-  if [ -f "$probe" ]; then
-    log "mirror_fresh_uapi: CLONE_AUTOREAP in zig linux/sched.h = $(grep -c CLONE_AUTOREAP "$probe" 2>/dev/null || true)"
+  if [ "${#UAPI_INCLUDE_FLAGS[@]}" -gt 0 ]; then
+    log "bundled UAPI -I: ${UAPI_INCLUDE_FLAGS[*]}"
   fi
+}
+
+# uapi_include_landed <build_dir>
+#
+# Landing gate: true when a generated Makefile really carries the `-I` form of a
+# bundled UAPI root.  configure may rewrite or drop the env CPPFLAGS entirely,
+# so "we exported it" is not evidence — the compiler command line is.
+#
+# `-e` is required: the pattern itself starts with `-I`, which grep would
+# otherwise try to read as an option cluster (rc=2, i.e. a gate that can never
+# pass).  rc 1 means "no match" and rc 2 "could not search"; the caller treats
+# both as failure.
+uapi_include_landed() {
+  grep -rEq --include=Makefile -e "$UAPI_INCLUDE_GATE_RE" "$1" 2>/dev/null
+}
+
+# require_uapi_include_landed <build_dir> [<root> ...]
+#
+# No-op when the tool declares no `uapi_include` roots.  Otherwise die unless the
+# `-I` really landed: grepping only the bare path would be satisfied by the
+# `-isystem .../bundled/...` line that strace's configure emits by itself.
+require_uapi_include_landed() {
+  local build_dir="$1"; shift
+  [ "$#" -gt 0 ] || return 0
+  if uapi_include_landed "$build_dir"; then
+    log "bundled UAPI -I landing gate: ok in $build_dir"
+    return 0
+  fi
+  die "bundled UAPI 的 -I 没有落到编译命令行 (expected /$UAPI_INCLUDE_GATE_RE/ under $build_dir)"
 }

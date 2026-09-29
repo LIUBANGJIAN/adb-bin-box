@@ -162,39 +162,45 @@ tools:
     #    BTRFS_BLOCK_GROUP_METADATA_REMAP / BTRFS_REMAP_TREE_OBJECTID
     #    (bundled/linux/include/uapi/linux/btrfs_tree.h).
     #
-    #    configure DOES enable that bundled tree here (its probe compares zig's
-    #    6.19 <linux/version.h> against the bundled 7.x one and fails, so
-    #    st_cv_use_bundled_headers=yes), but it injects the dirs only as
-    #    `-isystem` (upstream 2024-10-26, "use -isystem instead of -I for bundled
-    #    Linux UAPI headers" -- motive was warning suppression only).  zig's cc
-    #    driver resolves <linux/btrfs*.h> to its own older UAPI copies anyway, so
-    #    both headers stay shadowed.  Measured: adding -I<bundled dir> to CPPFLAGS
-    #    (what this entry did up to a66d71e) changed nothing at all.
+    #    We pass --enable-bundled=yes, which sets st_cv_use_bundled_headers=yes
+    #    directly -- configure only runs its compare-the-two-<linux/version.h>
+    #    probe for =check (configure.ac:271-290) -- so the bundled tree IS
+    #    enabled here, but the dirs are injected only as `-isystem` (upstream
+    #    2024-10-26, "use -isystem instead of -I for bundled Linux UAPI
+    #    headers"; the motive was warning suppression only).  Under that
+    #    injection alone zig's cc driver still resolves <linux/btrfs*.h> to its
+    #    own older UAPI copies, so both headers stay shadowed.
     #    patches/strace-bundled-btrfs-include.patch therefore makes src/btrfs.c
     #    include the bundled headers by quoted RELATIVE path, which no -I /
     #    -isystem ordering can override, and the identical include guards then
-    #    neutralise the angle-bracket includes.
+    #    neutralise the angle-bracket includes.  (The `uapi_include` -I below
+    #    now un-shadows these two headers as well; the quoted include stays as
+    #    the order-independent belt for this one file.)
     #
-    # --enable-bundled=yes pins the intent (it only feeds that same probe), so a
-    # future zig whose UAPI catches up cannot silently flip it off.
+    # =yes is deliberate rather than =check: the decision is pinned instead of
+    # detected, so a future zig whose UAPI catches up cannot silently flip the
+    # bundled tree off (and with it the xlat constants above).
     env:
       CC_FOR_BUILD: gcc
     patches: ["strace-bundled-btrfs-include.patch"]
     # zig 0.16.0 bundles a Linux UAPI snapshot so old that it lacks constants
-    # strace's build depends on (measured on CI: "src/xlat/clone3_flags.h: error:
-    # use of undeclared identifier 'CLONE_AUTOREAP'").  strace ships its own,
-    # newer copy of the UAPI headers under bundled/linux, but configure injects
-    # that tree only as `-isystem`, and with that ordering zig's own older libc
-    # copy still won the lookup (measured: CLONE_AUTOREAP stayed undeclared).
-    # `mirror_fresh_uapi` makes the fix independent of include-path ordering by
-    # copying these fresh files straight OVER zig's copies before configure runs
-    # (see build/engine/common.sh):
-    #   * the generic tree (linux/*.h including sched.h with CLONE_AUTOREAP);
+    # strace's build depends on (measured on CI:
+    # "src/xlat/clone3_flags.h: error: use of undeclared identifier
+    # 'CLONE_AUTOREAP'").  strace ships its own, newer copy under bundled/linux,
+    # but configure injects that tree only as `-isystem` -- and that loses.
+    # Measured with `zig cc -E -v`: the *user* `-I` group is searched BEFORE
+    # zig's builtin libc dirs, while the user `-isystem` group is searched AFTER
+    # them.  These roots are therefore handed to the compiler as plain `-I` by
+    # setup_zig_env() (see build/engine/common.sh), and build.sh asserts the
+    # `-I` really landed in the generated Makefile before anything is compiled:
+    #   * the generic tree (linux/*.h including sched.h with CLONE_AUTOREAP).
+    #     ANCHOR root: it must exist, so a typo dies immediately instead of
+    #     degrading into a confusing undeclared-identifier error later.
     #   * the kernel-arch tree arch/<karch>/include/uapi (only asm/fcntl.h, but
-    #     it must beat zig's arch asm/ header) — ${karch} comes from
-    #     build/verify/abi_matrix.json.  strace ships no arch/x86 tree, so that
-    #     root is simply skipped on the x86/x86_64 jobs.
-    uapi_fresh:
+    #     it must beat zig's own arch asm/ header) — ${karch} comes from
+    #     build/verify/abi_matrix.json.  strace 7.2 ships only arch/arm64, so
+    #     this root is silently skipped on the armeabi-v7a/x86_64/x86 jobs.
+    uapi_include:
       - "bundled/linux/include/uapi"
       - "bundled/linux/arch/${karch}/include/uapi"
     configure:
@@ -242,11 +248,26 @@ tools:
     # make command line.  zig's cc driver rejects `-z` outright ("unsupported
     # linker extension flag") and also rejects the lld spelling that would
     # replace it ("unsupported linker arg: --allow-multiple-definition"), so no
-    # muldefs form reaches the linker through `zig cc`.  The patch drops the flag
-    # and adds `-fcommon` (the compile-time equivalent for tentative
+    # muldefs form reaches the linker through `zig cc`.  The patch drops the
+    # flag and adds `-fcommon` (the compile-time equivalent for tentative
     # definitions) as a safety net; a scan of 0.22.01 finds no duplicate
     # symbols, so the net is belt-and-braces.
-    patches: ["stress-ng-arch-typo.patch", "stress-ng-drop-muldefs.patch"]
+    # Third patch: stress-memthrash.c's *fallback* macros forget the parentheses
+    # around `addr` -- `(*addr)` / `(*addr) = (val)` -- while every call site
+    # passes an expression (`ptr + 6`).  Macro expansion is pure text, so
+    # `MEMTHRASH_STORE128(ptr + 6, r6)` becomes `*ptr + 6 = r6` and clang
+    # rejects it ("expression is not assignable", all 8 stores).  Only x86_64
+    # reaches that fallback: it alone is HAVE_INT128_T + HAVE_ASM_X86_MOVNTDQA
+    # without HAVE_NT_STORE128, so arm64/arm take the parenthesised
+    # stress_nt_store128((addr),(val)) variant and 32-bit x86 never compiles the
+    # function.  MEMTHRASH_LOAD128's fallback has the same defect and made it
+    # read from the wrong address (invisible, because it only reads).  Both
+    # lines are fixed; the CI note pointing at line 358 rather than at the
+    # HAVE_NT_STORE128 variant on line 356 is what pinned that config down.
+    patches:
+      - "stress-ng-arch-typo.patch"
+      - "stress-ng-drop-muldefs.patch"
+      - "stress-ng-memthrash-macro-parens.patch"
     configure: {}
     make:
       targets: ["all"]
