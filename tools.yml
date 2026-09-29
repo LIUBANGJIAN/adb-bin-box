@@ -206,7 +206,11 @@ tools:
     # sites sit in the `#else` of `#if defined(HAVE_UNAME) &&
     # defined(HAVE_SYS_UTSNAME_H)`, so upstream's normal Linux build never
     # compiles them -- our cross build (feature undefined) does. Fix word order.
-    patches: ["stress-ng-arch-typo.patch"]
+    # Second patch: the Makefile's STATIC=1 LDFLAGS uses GNU-ld-only `-z muldefs`
+    # behind an `override`, so it cannot be overridden on the make command line;
+    # zig's cc driver rejects `-z` outright ("unsupported linker extension flag"),
+    # the equivalent lld flag is -Wl,--allow-multiple-definition.
+    patches: ["stress-ng-arch-typo.patch", "stress-ng-linker-muldefs.patch"]
     configure: {}
     make:
       targets: ["all"]
