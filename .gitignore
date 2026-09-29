@@ -26,6 +26,9 @@ _*.txt
 _*.log
 _*.json
 
+# ---- local agent/workspace state ----------------------------------------
+.workbuddy/
+
 # ---- editors / os --------------------------------------------------------
 .DS_Store
 Thumbs.db
