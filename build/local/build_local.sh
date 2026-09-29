@@ -58,7 +58,7 @@ export WORK_ROOT="$WORK"
 export ZIG_INSTALL_DIR="${ZIG_INSTALL_DIR:-$WORK/toolchains/zig}"
 if ! command -v zig >/dev/null 2>&1; then
   log "zig not on PATH; installing $ZIG_VERSION into $ZIG_INSTALL_DIR"
-  "$SCRIPT_DIR/install-zig.sh" --version "$ZIG_VERSION" --dir "$ZIG_INSTALL_DIR" --no-export
+  bash "$SCRIPT_DIR/install-zig.sh" --version "$ZIG_VERSION" --dir "$ZIG_INSTALL_DIR" --no-export
   export PATH="$ZIG_INSTALL_DIR:$PATH"
   export ZIG_BIN="$ZIG_INSTALL_DIR/zig"
 fi
@@ -70,7 +70,7 @@ run_one() {
   if [ "$SKIP_SMOKE" -eq 1 ]; then
     extra+=(--skip-smoke)
   fi
-  "$REPO_ROOT/build/engine/build.sh" \
+  bash "$REPO_ROOT/build/engine/build.sh" \
     --tool "$tool" --abi "$abi" \
     --manifest "$MANIFEST" --deps "$DEPS_MANIFEST" \
     --root "$REPO_ROOT" --work "$WORK" --dist "$DIST" \

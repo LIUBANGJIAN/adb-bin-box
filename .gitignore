@@ -19,6 +19,12 @@ zig/
 __pycache__/
 *.py[cod]
 
+# ---- local CI-debug scratch (never commit; may contain transient secrets) --
+_ci/
+_*.txt
+_*.log
+_*.json
+
 # ---- editors / os --------------------------------------------------------
 .DS_Store
 Thumbs.db

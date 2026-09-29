@@ -95,8 +95,9 @@ jobs:
             --dist "$GITHUB_WORKSPACE/dist" 2>&1 | tee "$LOG"
           status="${PIPESTATUS[0]}"
           if [ "$status" -ne 0 ]; then
-            echo "::error::build failed (status=$status) tool=${{ inputs.tool_id }} abi=${{ inputs.abi }}"
-            tail -n 40 "$LOG" | while IFS= read -r l; do printf '::error::%s\n' "$l"; done
+            echo "::error::build failed status=$status tool=${{ inputs.tool_id }} abi=${{ inputs.abi }}"
+            tail -n 9 "$LOG" | sed -e 's/%/%25/g' -e 's/\r$//' \
+              | while IFS= read -r l; do printf '::error::%s\n' "$l"; done
           fi
           exit "$status"
 
