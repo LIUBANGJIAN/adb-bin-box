@@ -1,0 +1,197 @@
+# =============================================================================
+# adb-bin-box — tool manifest (the ONLY file a contributor edits to add a tool)
+# =============================================================================
+# Schema: build/gen/schema.json  |  Semantics: docs/system_design.md §3.2
+#
+# Every tool below is cross-compiled with Zig's bundled musl libc
+# (`zig cc -target <triple>`), where the triple comes from
+# build/verify/abi_matrix.json — never hardcoded here.
+#
+# Goal (Phase 1): make all 5 tools × 4 ABIs = 20 jobs green with the *fewest*
+# external dependencies.  Optional features are cut first (Tier 1) and only the
+# genuinely required libraries are statically cross-built (Tier 2, see deps.yml).
+# =============================================================================
+version: 1
+
+defaults:
+  abis: [arm64-v8a, armeabi-v7a, x86_64, x86]
+  cflags: "-O2 -fPIC"
+  ldflags: "-static"
+  strip: false            # zig has no standalone strip; llvm-strip is optional
+
+tools:
+  # ---------------------------------------------------------------------------
+  # curl — Tier 1 (cut everything optional). Phase 1 ships HTTP/FTP/etc. but
+  # NOT HTTPS (no TLS). Phase 2 = add deps:[openssl, zlib] + features:[tls,zlib].
+  # Trade-off: keeping `--without-ssl` avoids the single heaviest dependency
+  # (OpenSSL) and lets the whole pipeline prove itself first; HTTPS lands later.
+  # ---------------------------------------------------------------------------
+  - id: curl
+    name: curl
+    version: "8.22.0"
+    repo: curl/curl
+    source:
+      type: tarball
+      url: "https://curl.se/download/curl-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 1
+    bin: curl
+    deps: []                 # Phase 2: [openssl, zlib]
+    features: []             # Phase 2: [tls, zlib]
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+        # --- no TLS / no compression back-ends (Phase 1) ---
+        - "--without-ssl"
+        - "--without-zlib"
+        - "--without-brotli"
+        - "--without-zstd"
+        - "--without-libidn2"
+        - "--without-libpsl"
+        - "--without-nghttp2"
+        - "--without-libssh2"
+        # --- drop protocols that are useless on a phone / bloat the binary ---
+        - "--disable-ldap"
+        - "--disable-rtsp"
+        - "--disable-dict"
+        - "--disable-telnet"
+        - "--disable-tftp"
+        - "--disable-pop3"
+        - "--disable-imap"
+        - "--disable-smtp"
+        - "--disable-gopher"
+        - "--disable-mqtt"
+        # --- no perl-generated docs ---
+        - "--disable-manual"
+    smoke:
+      args: ["--version"]
+      contains: "curl 8.22.0"
+    notes: "Phase 1 has no TLS (HTTP/FTP only). Phase 2 turns on features:[tls] to statically build OpenSSL."
+
+  # ---------------------------------------------------------------------------
+  # htop — Tier 2. ncurses IS required (nothing links without it), everything
+  # else optional is disabled. Deps: ncursesw (statically built, see deps.yml).
+  # ---------------------------------------------------------------------------
+  - id: htop
+    name: htop
+    version: "3.5.3"
+    repo: htop-dev/htop
+    source:
+      type: tarball
+      url: "https://github.com/htop-dev/htop/releases/download/{version}/htop-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: htop
+    deps: [ncurses]
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+        - "--disable-hwloc"
+        - "--disable-affinity"
+        - "--disable-capabilities"
+        - "--disable-sensors"
+        - "--disable-delayacct"
+    smoke:
+      args: ["--version"]
+      contains: "3.5.3"
+    notes: "Requires static wide-char ncursesw. Non-root sees only part of /proc (see README limits)."
+
+  # ---------------------------------------------------------------------------
+  # iperf — Tier 0 (zig's musl libc is enough; TLS is an optional backend).
+  # The release tarball ships `configure`; if a future source lacks it the
+  # engine falls back to `autoreconf -fi` (configure.bootstrap) / the hook.
+  # ---------------------------------------------------------------------------
+  - id: iperf
+    name: iperf3
+    version: "3.21"
+    repo: esnet/iperf
+    source:
+      type: tarball
+      url: "https://github.com/esnet/iperf/releases/download/{version}/iperf-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 0
+    bin: iperf3
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+        - "--without-openssl"
+      bootstrap:
+        - "autoreconf -fi"
+    hooks:
+      pre_configure:
+        - "bash \"$REPO_ROOT/build/hooks/iperf.sh\""
+    smoke:
+      args: ["--version"]
+      contains: "iperf 3.21"
+    notes: "iperf3. `--without-openssl` keeps it dependency-free; add openssl later for --tinytest TLS."
+
+  # ---------------------------------------------------------------------------
+  # strace — Tier 0, but the KNOWN-RISK item (musl static syscall tables /
+  # ptrace). Written as conservatively as possible: no libunwind, no libdw, no
+  # stacktrace, no mpers. If it fails on CI the fix goes into patches/, not the
+  # engine.
+  # ---------------------------------------------------------------------------
+  - id: strace
+    name: strace
+    version: "7.2"
+    repo: strace/strace
+    source:
+      type: tarball
+      url: "https://github.com/strace/strace/releases/download/v{version}/strace-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 0
+    bin: strace
+    configure:
+      flags:
+        - "--enable-static"
+        - "--disable-shared"
+        - "--without-libunwind"
+        - "--without-libdw"
+        - "--enable-stacktrace=no"
+        - "--enable-mpers=no"
+    smoke:
+      args: ["--version"]
+      contains: "7.2"
+    notes: "STATIC musl risk item. On device it needs root (ptrace) for anything beyond `--version`."
+    abi_overrides:
+      # Conservative: nothing ABI-specific yet. Placeholder documents the hook
+      # for e.g. disabling a single syscall arch on 32-bit targets.
+      x86:
+        notes: "32-bit; mpers disabled globally."
+
+  # ---------------------------------------------------------------------------
+  # stress-ng — Tier 1, plain Makefile. STATIC=1 makes the Makefile add -static.
+  # The binary is taken straight from the build dir (no `make install`), so
+  # MAKE_INSTALL_TARGET is empty on purpose. No zlib (optional) in Phase 1.
+  # ---------------------------------------------------------------------------
+  - id: stress-ng
+    name: stress-ng
+    version: "0.22.01"
+    repo: ColinIanKing/stress-ng
+    source:
+      type: tarball
+      url: "https://github.com/ColinIanKing/stress-ng/archive/refs/tags/V{version}.tar.gz"
+      strip_components: 1
+    build_system: make
+    tier: 1
+    bin: stress-ng
+    configure: {}
+    make:
+      targets: ["all"]
+      install_target: ""            # empty => skip install; artifact from build dir
+      args: ["STATIC=1"]
+    artifacts:
+      - path: "stress-ng"
+        bin_name: "stress-ng"
+        required: true
+    smoke:
+      args: ["--version"]
+      contains: "0.22.01"
+    notes: "No zlib (Phase 2 enhancement). Some stressors need root; Android 10+ seccomp blocks others (see README)."

@@ -1,0 +1,167 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/LIUBANGJIAN/adb-bin-box/build/gen/schema.json",
+  "title": "adb-bin-box manifest schema (v1)",
+  "description": "JSON Schema for tools.yml. The deps.yml file reuses the '$defs/depEntry' definition (see x-files below). Mirrors system_design.md 3.2 / 3.3.",
+  "x-files": {
+    "tools.yml": "uses this document as-is (root schema)",
+    "deps.yml": "uses { version, deps: [ $defs/depEntry ] }"
+  },
+  "type": "object",
+  "required": ["version", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "defaults": { "$ref": "#/$defs/defaults" },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/toolEntry" }
+    }
+  },
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "abis": {
+      "type": "array",
+      "items": { "enum": ["arm64-v8a", "armeabi-v7a", "x86_64", "x86"] },
+      "uniqueItems": true
+    },
+    "buildSystem": {
+      "enum": ["autotools", "cmake", "make", "meson", "go", "script"]
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "abis": { "$ref": "#/$defs/abis" },
+        "cflags": { "type": "string" },
+        "ldflags": { "type": "string" },
+        "strip": { "type": "boolean" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "type": { "enum": ["tarball", "git", "local"] },
+        "url": { "type": "string" },
+        "tag": { "type": "string" },
+        "strip_components": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "configure": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "flags": { "type": "array", "items": { "type": "string" } },
+        "command": { "type": "string" },
+        "bootstrap": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "make": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targets": { "type": "array", "items": { "type": "string" } },
+        "install_target": { "type": "string" },
+        "install_vars": { "type": "array", "items": { "type": "string" } },
+        "args": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pre_configure": { "type": "array", "items": { "type": "string" } },
+        "post_configure": { "type": "array", "items": { "type": "string" } },
+        "pre_build": { "type": "array", "items": { "type": "string" } },
+        "post_build": { "type": "array", "items": { "type": "string" } },
+        "post_install": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "artifactRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "bin_name": { "type": "string" },
+        "strip": { "type": "boolean" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "smoke": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "args": { "type": "array", "items": { "type": "string" } },
+        "expect_exit": { "type": "integer" },
+        "contains": { "type": "string" }
+      }
+    },
+    "toolEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "build_system", "source"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "repo": { "type": "string" },
+        "source": { "$ref": "#/$defs/source" },
+        "build_system": { "$ref": "#/$defs/buildSystem" },
+        "deps": { "type": "array", "items": { "$ref": "#/$defs/slug" } },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "abis": { "$ref": "#/$defs/abis" },
+        "bin": { "type": "string" },
+        "tier": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "enabled": { "type": "boolean" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "configure": { "$ref": "#/$defs/configure" },
+        "make": { "$ref": "#/$defs/make" },
+        "hooks": { "$ref": "#/$defs/hooks" },
+        "patches": { "type": "array", "items": { "type": "string" } },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifactRule" } },
+        "smoke": { "$ref": "#/$defs/smoke" },
+        "abi_overrides": {
+          "type": "object",
+          "additionalProperties": { "type": "object" }
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "depEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "build_system", "source"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "version": { "type": "string" },
+        "repo": { "type": "string" },
+        "source": { "$ref": "#/$defs/source" },
+        "build_system": { "$ref": "#/$defs/buildSystem" },
+        "configure": { "$ref": "#/$defs/configure" },
+        "make": { "$ref": "#/$defs/make" },
+        "static": { "type": "boolean" },
+        "provides": { "type": "array", "items": { "type": "string" } },
+        "abis": { "$ref": "#/$defs/abis" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "abi_overrides": {
+          "type": "object",
+          "additionalProperties": { "type": "object" }
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

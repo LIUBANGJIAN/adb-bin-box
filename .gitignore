@@ -1,0 +1,30 @@
+# ---- build outputs -------------------------------------------------------
+dist/
+work/
+out/
+prefix/
+
+# ---- zig caches (F3: zig needs a writable cache) -------------------------
+.zig-cache/
+.zig-global/
+.zig-local/
+
+# ---- downloaded toolchains / sources ------------------------------------
+zig/
+*.tar.gz
+*.tar.xz
+*.tar.bz2
+
+# ---- python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+
+# ---- editors / os --------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ---- keep placeholders ---------------------------------------------------
+!patches/.gitkeep

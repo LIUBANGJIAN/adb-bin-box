@@ -1,0 +1,34 @@
+{
+  "arm64-v8a": {
+    "zig_target": "aarch64-linux-musl",
+    "e_machine": 183,
+    "machine_name": "AArch64",
+    "bits": 64,
+    "qemu": "qemu-aarch64-static",
+    "runner": "ubuntu-24.04"
+  },
+  "armeabi-v7a": {
+    "zig_target": "arm-linux-musleabihf",
+    "e_machine": 40,
+    "machine_name": "ARM",
+    "bits": 32,
+    "qemu": "qemu-arm-static",
+    "runner": "ubuntu-24.04"
+  },
+  "x86_64": {
+    "zig_target": "x86_64-linux-musl",
+    "e_machine": 62,
+    "machine_name": "x86_64",
+    "bits": 64,
+    "qemu": null,
+    "runner": "ubuntu-24.04"
+  },
+  "x86": {
+    "zig_target": "x86-linux-musl",
+    "e_machine": 3,
+    "machine_name": "i386",
+    "bits": 32,
+    "qemu": null,
+    "runner": "ubuntu-24.04"
+  }
+}

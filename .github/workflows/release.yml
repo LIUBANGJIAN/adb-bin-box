@@ -1,0 +1,196 @@
+# Release pipeline: a `v*` tag (or a manual run) builds and publishes GitHub
+# Release assets (system_design.md §4.4).
+#
+# Behaviour worth knowing:
+#   * one archive per tool (see build/package/package.sh);
+#   * the release body is generated from the artifacts by
+#     build/package/release_notes.sh — it documents the direct AND the
+#     https://gh-proxy.com/ accelerated download URLs;
+#   * every publish PURGES older releases (keeping only the one being created),
+#     so the Releases page always shows only the newest version.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (empty = v<VERSION> from the VERSION file)"
+        required: false
+        default: ""
+      tools:
+        description: "Comma-separated tool ids to build (empty = all)"
+        required: false
+        default: ""
+      abis:
+        description: "Comma-separated ABI subset (empty = all)"
+        required: false
+        default: ""
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # --------------------------------------------------------------------------
+  # 1. Resolve the tag/version, validate manifests, emit the matrix.
+  # --------------------------------------------------------------------------
+  prepare:
+    name: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      count: ${{ steps.matrix.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install --upgrade pip pyyaml
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="v$(tr -d ' \t\r\n' < VERSION)"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "resolved release tag=$TAG version=$VERSION (event=${GITHUB_EVENT_NAME})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate manifests
+        run: python build/gen/manifest.py validate --tools tools.yml --deps deps.yml
+
+      - name: Generate matrix
+        id: matrix
+        env:
+          ABIS: ${{ github.event.inputs.abis }}
+          TOOLS: ${{ github.event.inputs.tools }}
+        run: |
+          python build/gen/generate_matrix.py tools.yml \
+            --deps deps.yml \
+            ${ABIS:+--abis "$ABIS"} \
+            ${TOOLS:+--only "$TOOLS"} \
+            --to-github-output "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------------------------
+  # 2. Build every selected (tool, abi).
+  # --------------------------------------------------------------------------
+  build:
+    name: build
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/_build-tool.yml
+    with:
+      tool_id: ${{ matrix.tool_id }}
+      abi: ${{ matrix.abi }}
+      zig_target: ${{ matrix.zig_target }}
+      runner: ${{ matrix.runner }}
+      job_name: ${{ matrix.job_name }}
+
+  # --------------------------------------------------------------------------
+  # 3. Package, purge older releases, publish.
+  # --------------------------------------------------------------------------
+  release:
+    name: publish release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install --upgrade pip pyyaml
+
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _arts
+
+      - name: Reconstruct dist/
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for d in _arts/dist__*; do
+            base="$(basename "$d")"
+            rest="${base#dist__}"
+            tool="${rest%%__*}"
+            abi="${rest#*__}"
+            mkdir -p "dist/$tool/$abi"
+            cp -f "$d"/* "dist/$tool/$abi/"
+          done
+          find dist -type f -printf '%p\n' | sort
+
+      - name: Package (tag version wins, one archive per tool)
+        env:
+          REL_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          bash build/package/package.sh \
+            --dist dist --out dist/_packages --version "$REL_VERSION" --clean
+
+      - name: Build release notes
+        env:
+          REL_TAG: ${{ needs.prepare.outputs.tag }}
+          REL_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          bash build/package/release_notes.sh \
+            --packages dist/_packages \
+            --repo "${{ github.repository }}" \
+            --tag "$REL_TAG" \
+            --version "$REL_VERSION" \
+            --out dist/_packages/RELEASE_NOTES.md \
+            --proxy "https://gh-proxy.com/"
+
+      # Delete every OTHER release before creating this one, so only the newest
+      # survives. Never touches KEEP_TAG (the tag we are about to publish).
+      - name: Purge old releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "keeping tag: $KEEP_TAG"
+          gh release list --limit 200 --json tagName --jq '.[].tagName' > /tmp/old_tags.txt || true
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            if [ "$t" = "$KEEP_TAG" ]; then
+              echo "skip (current): $t"
+              continue
+            fi
+            echo "deleting old release: $t"
+            gh release delete "$t" --yes --cleanup-tag || echo "  (skip $t)"
+          done < /tmp/old_tags.txt
+          echo "purge done"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "adb-bin-box ${{ needs.prepare.outputs.tag }}"
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          body_path: dist/_packages/RELEASE_NOTES.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/_packages/*.tar.gz
+            dist/_packages/SHA256SUMS
+            dist/_packages/manifest.json

@@ -1,0 +1,91 @@
+%% adb-bin-box 关键调用流程合集
+
+%% ---------- 1. 清单 -> 动态矩阵 ----------
+sequenceDiagram
+    autonumber
+    participant Dev as 贡献者
+    participant GH as GitHub
+    participant Gen as build.yml :: generate job
+    participant ML as build/gen/manifest.py
+    participant MG as build/gen/generate_matrix.py
+    participant BJ as build.yml :: build job (matrix)
+
+    Dev->>GH: git push / pull_request / workflow_dispatch
+    GH->>Gen: 启动 generate job
+    Gen->>ML: load("tools.yml","deps.yml") + validate() + expand_defaults()
+    ML-->>Gen: Manifest（已校验、依赖已解析）
+    Gen->>MG: build(manifest, abis=defaults, shard=0)
+    MG->>MG: 笛卡尔积 tools.enabled × abis -> include[]
+    MG->>MG: 若 include > 256 则自动分片（每片 <=256）
+    MG-->>Gen: BuildMatrix JSON
+    Gen->>GH: echo "matrix=$JSON" >> $GITHUB_OUTPUT
+    GH->>BJ: strategy.matrix = fromJSON(needs.generate.outputs.matrix)
+    Note over BJ: 展开为 N 个 job（5 库 × 4 ABI = 20），fail-fast=false
+
+%% ---------- 2. 单个 tool × abi 完整构建 ----------
+sequenceDiagram
+    autonumber
+    participant J as _build-tool.yml (tool×abi)
+    participant IZ as build/local/install-zig.sh
+    participant BE as build/engine/build.sh
+    participant DB as build/systems/deps.sh
+    participant DR as build/systems/autotools.sh
+    participant AR as build/engine/detect-artifact.sh
+    participant EV as build/verify/elf_check.py
+    participant SM as build/verify/smoke_test.sh
+
+    J->>IZ: 安装/复用固定版本 zig（命中 cache）
+    IZ-->>J: zig 就绪 + ZIG_*_CACHE_DIR 设置
+    J->>BE: build.sh --tool curl --abi arm64-v8a --manifest tools.yml
+    BE->>BE: 决定 ZIG_TARGET / CC / PREFIX / WORK 目录
+    BE->>DB: 对每个 dep 交叉编译（zlib/ncurses/openssl -> $PREFIX）
+    DB-->>BE: prefix 就绪（命中 cache 则秒回）
+    BE->>DR: apply patches -> bootstrap -> configure -> make -> install
+    DR-->>BE: 已 install 到 $PREFIX，产物在 $PREFIX/bin
+    BE->>AR: locate(ctx, tool.artifacts) -> glob 匹配 + 改名 + 落地 dist/curl/arm64-v8a/curl
+    AR-->>BE: 产物路径列表
+    BE->>EV: verify(dist/curl/arm64-v8a/curl, expected=183)
+    EV-->>BE: VerifyResult(ok=true, is_static=true, e_machine=183)
+    alt ok == false
+        EV-->>BE: exit 1（门禁拦截，job 失败）
+    end
+    BE->>SM: smoke_test.sh --bin ... --abi arm64-v8a --args "--version"
+    SM-->>BE: SmokeResult(ok=true, qemu_needed=true)
+    BE-->>J: exit 0；上传 artifact（dist/<tool>/<abi>/）
+
+%% ---------- 3. ELF 硬门禁校验 ----------
+sequenceDiagram
+    autonumber
+    participant EV as elf_check.py
+    participant F as 目标二进制
+    EV->>F: 读取前 64 字节 ELF Header
+    EV->>EV: 校验 magic = 7f 45 4c 46，ELFCLASS，ELFDATA
+    EV->>EV: 读 e_type（ET_EXEC/ET_DYN）、e_machine、e_phoff/e_phnum
+    EV->>F: 读取 Program Header Table
+    loop 每个 program header
+        EV->>EV: 若 p_type == PT_INTERP -> has_pt_interp = true
+    end
+    EV->>EV: is_static = NOT has_pt_interp   # 结构性判据，拒绝"看起来静态"
+    EV->>EV: ok = is_static AND e_machine == expected AND size in [1KB, 50MB]
+    alt ok
+        EV-->>EV: print OK，exit(0)
+    else
+        EV-->>EV: print 原因列表，exit(1)
+    end
+
+%% ---------- 4. 发布 ----------
+sequenceDiagram
+    autonumber
+    participant T as git tag v2026.09.29
+    participant R as release.yml
+    participant B as _build-tool.yml (matrix)
+    participant PK as build/package/package.sh
+    participant GR as GitHub Release
+
+    T->>R: push tag 匹配 v*
+    R->>B: 全量构建 tools×abis（复用同一 reusable workflow）
+    B-->>R: 各 tool×abi 产物 artifact
+    R->>PK: collect(dist) -> naming() -> tar.gz
+    PK->>PK: 生成 SHA256SUMS + manifest.json（version/abi/sha256/size）
+    PK-->>R: 资产清单
+    R->>GR: gh release create + 上传全部资产

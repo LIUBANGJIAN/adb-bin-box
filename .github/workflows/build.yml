@@ -1,0 +1,136 @@
+# Main build pipeline: manifest -> dynamic matrix -> parallel builds -> package.
+#
+# The matrix is generated from tools.yml (system_design.md §4.1); adding a tool
+# to the manifest is all it takes to grow the pipeline — this file never
+# changes.  A manual run (workflow_dispatch) may instead build a SUBSET by
+# filling `tools` and/or `abis`.
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      abis:
+        description: "Comma-separated ABI subset (empty = all)"
+        required: false
+        default: ""
+      tools:
+        description: "Comma-separated tool ids to build, e.g. curl,htop (empty = all)"
+        required: false
+        default: ""
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------
+  # 1. Validate the manifests and emit the build matrix.
+  # --------------------------------------------------------------------------
+  generate:
+    name: generate matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      count: ${{ steps.matrix.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install python deps
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Validate manifests
+        run: python build/gen/manifest.py validate --tools tools.yml --deps deps.yml
+
+      - name: Generate matrix
+        id: matrix
+        env:
+          ABIS: ${{ github.event.inputs.abis }}
+          TOOLS: ${{ github.event.inputs.tools }}
+        run: |
+          python build/gen/generate_matrix.py tools.yml \
+            --deps deps.yml \
+            ${ABIS:+--abis "$ABIS"} \
+            ${TOOLS:+--only "$TOOLS"} \
+            --to-github-output "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "matrix has ${{ steps.matrix.outputs.count }} job(s)" >> "$GITHUB_STEP_SUMMARY"
+          echo "tools='${{ github.event.inputs.tools }}' abis='${{ github.event.inputs.abis }}'" >> "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------------------
+  # 2. One reusable-workflow call per (tool, abi).  fail-fast:false so a single
+  #    tool failing (e.g. strace) never masks the other builds.
+  # --------------------------------------------------------------------------
+  build:
+    name: build
+    needs: generate
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate.outputs.matrix) }}
+    uses: ./.github/workflows/_build-tool.yml
+    with:
+      tool_id: ${{ matrix.tool_id }}
+      abi: ${{ matrix.abi }}
+      zig_target: ${{ matrix.zig_target }}
+      runner: ${{ matrix.runner }}
+      job_name: ${{ matrix.job_name }}
+
+  # --------------------------------------------------------------------------
+  # 3. Collect every artifact, rebuild dist/, and produce one archive per tool.
+  # --------------------------------------------------------------------------
+  package:
+    name: package
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install --upgrade pip pyyaml
+
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _arts
+
+      - name: Reconstruct dist/
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for d in _arts/dist__*; do
+            base="$(basename "$d")"
+            rest="${base#dist__}"
+            tool="${rest%%__*}"
+            abi="${rest#*__}"
+            mkdir -p "dist/$tool/$abi"
+            cp -f "$d"/* "dist/$tool/$abi/"
+          done
+          find dist -type f -printf '%p\n' | sort
+
+      - name: Package (one archive per tool)
+        run: bash build/package/package.sh --dist dist --out dist/_packages --clean
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/_packages/*
+          if-no-files-found: error
+          retention-days: 14

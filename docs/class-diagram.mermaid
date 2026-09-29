@@ -1,0 +1,175 @@
+classDiagram
+    class Manifest {
+        +int version
+        +map defaults
+        +ToolSpec[] tools
+        +DepSpec[] deps
+        +load(path) Manifest
+        +validate() void
+        +expand_defaults() Manifest
+        +resolve_deps(tool) DepSpec[]
+    }
+    class ToolSpec {
+        +string id
+        +string name
+        +string version
+        +string repo
+        +string source_type
+        +string build_system
+        +string[] deps
+        +string[] features
+        +string[] abis
+        +string bin
+        +int tier
+        +bool enabled
+        +map env
+        +Map configure
+        +Map make
+        +Map hooks
+        +string[] patches
+        +ArtifactRule[] artifacts
+        +SmokeSpec smoke
+        +map abi_overrides
+    }
+    class DepSpec {
+        +string id
+        +string version
+        +string repo
+        +SourceSpec source
+        +string build_system
+        +Map configure
+        +bool static
+        +string[] provides
+        +map abi_overrides
+    }
+    class SourceSpec {
+        +string type
+        +string url
+        +string tag
+        +int strip_components
+    }
+    class ArtifactRule {
+        +string path
+        +string bin_name
+        +bool strip
+        +bool required
+    }
+    class SmokeSpec {
+        +string[] args
+        +int expect_exit
+        +string contains
+    }
+    class AbiSpec {
+        +string abi
+        +string zig_target
+        +int e_machine
+        +int bits
+        +string qemu
+    }
+    class MatrixEntry {
+        +string tool_id
+        +string abi
+        +string zig_target
+        +string runner
+        +string[] dep_ids
+        +string job_name
+    }
+    class BuildMatrix {
+        +MatrixEntry[] include
+    }
+    class MatrixGenerator {
+        +build(manifest, abis, shard) BuildMatrix
+        +to_json() string
+    }
+    class BuildContext {
+        +ToolSpec tool
+        +AbiSpec abi
+        +string src_dir
+        +string build_dir
+        +string prefix
+        +string out_dir
+        +string zig_target
+        +string cc
+        +string cxx
+        +string strip
+        +map env
+    }
+    class BuildSystemDriver {
+        <<abstract>>
+        +configure(ctx) void
+        +build(ctx) void
+        +install(ctx) void
+        +artifact_search_dir(ctx) string
+    }
+    class AutotoolsDriver
+    class CMakeDriver
+    class MakeDriver
+    class MesonDriver
+    class GoDriver
+    class ScriptDriver
+    class DependencyBuilder {
+        +build(dep, abi, prefix) string
+    }
+    class BuildEngine {
+        +run(tool, abi) BuildContext
+        +select_driver(build_system) BuildSystemDriver
+    }
+    class ArtifactResolver {
+        +locate(ctx, rules) string[]
+    }
+    class ElfVerifier {
+        +verify(path, expected_machine) VerifyResult
+    }
+    class SmokeRunner {
+        +run(path, abi, smoke) SmokeResult
+    }
+    class VerifyResult {
+        +bool is_static
+        +bool has_pt_interp
+        +int e_machine
+        +int e_type
+        +long size
+        +bool ok
+        +string[] reasons
+    }
+    class SmokeResult {
+        +bool ran
+        +int exit_code
+        +bool qemu_needed
+        +bool ok
+        +string output_head
+    }
+    class Packager {
+        +collect(dist) string[]
+        +name(tool, abi, version) string
+        +archive(files) string[]
+        +checksums(files) string
+    }
+
+    Manifest "1" o-- "*" ToolSpec
+    Manifest "1" o-- "*" DepSpec
+    ToolSpec "1" *-- "*" ArtifactRule
+    ToolSpec "1" *-- "1" SmokeSpec
+    DepSpec "1" *-- "1" SourceSpec
+    MatrixGenerator ..> Manifest
+    MatrixGenerator ..> BuildMatrix
+    BuildMatrix "1" *-- "*" MatrixEntry
+    BuildEngine ..> BuildContext
+    BuildEngine ..> BuildSystemDriver
+    BuildEngine ..> DependencyBuilder
+    BuildEngine ..> ArtifactResolver
+    BuildContext ..> ToolSpec
+    BuildContext ..> AbiSpec
+    BuildSystemDriver <|-- AutotoolsDriver
+    BuildSystemDriver <|-- CMakeDriver
+    BuildSystemDriver <|-- MakeDriver
+    BuildSystemDriver <|-- MesonDriver
+    BuildSystemDriver <|-- GoDriver
+    BuildSystemDriver <|-- ScriptDriver
+    ArtifactResolver ..> ArtifactRule
+    ArtifactResolver ..> VerifyResult
+    ElfVerifier ..> AbiSpec
+    ElfVerifier ..> VerifyResult
+    SmokeRunner ..> SmokeSpec
+    SmokeRunner ..> SmokeResult
+    Packager ..> VerifyResult

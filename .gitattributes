@@ -1,0 +1,30 @@
+# Force LF in the repository for all text files.
+#
+# The CI runners are Linux, where CRLF in *.sh / *.yml / *.py breaks execution
+# (bash sees stray \r; YAML/CRLF gets folded oddly). Developers on Windows can
+# still check out with their preferred ending locally, but git stores — and the
+# runner receives — LF only.
+#
+# Binary artifacts must never be touched by the text filter.
+
+* text=auto eol=lf
+
+# Belt-and-suspenders: scripts/configs that MUST be LF on the runner.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.py    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.in    text eol=lf
+*.cmake text eol=lf
+*.mermaid text eol=lf
+VERSION text eol=lf
+
+# Binary: never apply text conversion.
+*.tar.gz binary
+*.gz     binary
+*.zip    binary
+*.png    binary
+*.jpg    binary
