@@ -354,7 +354,7 @@ def normalize_tool(
         "make": normalize_make(raw.get("make")),
         "hooks": normalize_hooks(raw.get("hooks")),
         "patches": as_str_list(raw.get("patches")),
-        "uapi_include": as_str_list(raw.get("uapi_include")),
+        "uapi_fresh": as_str_list(raw.get("uapi_fresh")),
         "artifacts": normalize_artifacts(raw.get("artifacts")),
         "smoke": normalize_smoke(raw.get("smoke")),
         "abi_overrides": raw.get("abi_overrides") or {},
@@ -596,7 +596,7 @@ def emit_shell(
     if not mapping.get("ZIG_TARGET"):
         mapping["ZIG_TARGET"] = abi_spec.zig_target
     # ``${karch}`` lets a tool entry point at its per-ABI bundled kernel-arch
-    # UAPI tree (see strace's ``uapi_include`` in tools.yml).
+    # UAPI tree (see strace's ``uapi_fresh`` in tools.yml).
     mapping["karch"] = abi_spec.karch
 
     deps = manifest.resolve_deps(tool_id, abi)
@@ -653,19 +653,7 @@ def emit_shell(
         )
 
     lines.append(_sh_array("PATCHES", spec["patches"]))
-    # ``uapi_include`` roots become plain `-I` flags (see common.sh).  They go
-    # through expand_tokens() like every other path-bearing field, and the result
-    # is asserted '$'-free: a literal ``$SRC_DIR`` left in an emitted value would
-    # silently become a bogus relative path in the compiler command line instead
-    # of failing — the exact silent-miss class the landing gate exists for.
-    uapi_include = _tokens(spec["uapi_include"], mapping)
-    for entry in uapi_include:
-        if "$" in entry:
-            raise ManifestError(
-                "tool %r abi %r: unresolved $ token in uapi_include entry %r"
-                % (tool_id, abi, entry)
-            )
-    lines.append(_sh_array("UAPI_INCLUDE", uapi_include))
+    lines.append(_sh_array("UAPI_FRESH", _tokens(spec["uapi_fresh"], mapping)))
 
     art_paths = _tokens([a["path"] for a in spec["artifacts"]], mapping)
     lines.append(_sh_array("ARTIFACT_PATHS", art_paths))

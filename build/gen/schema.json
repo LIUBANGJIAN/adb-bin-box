@@ -128,8 +128,8 @@
         "make": { "$ref": "#/$defs/make" },
         "hooks": { "$ref": "#/$defs/hooks" },
         "patches": { "type": "array", "items": { "type": "string" } },
-        "uapi_include": {
-          "description": "Bundled Linux UAPI roots (relative to $SRC_DIR) handed to the compiler as plain -I flags, which beat zig's own older builtin UAPI copies. First entry is the anchor and must exist; further entries are skipped silently when absent. String or list of strings.",
+        "uapi_fresh": {
+          "description": "Bundled Linux UAPI roots (relative to $SRC_DIR) to mirror over zig's older copies. String or list of strings.",
           "oneOf": [
             { "type": "string" },
             { "type": "array", "items": { "type": "string" } }
