@@ -80,7 +80,7 @@ tools:
     repo: htop-dev/htop
     source:
       type: tarball
-      url: "https://github.com/htop-dev/htop/releases/download/{version}/htop-{version}.tar.gz"
+      url: "https://github.com/htop-dev/htop/releases/download/{version}/htop-{version}.tar.xz"
       strip_components: 1
     build_system: autotools
     tier: 2
@@ -143,7 +143,7 @@ tools:
     repo: strace/strace
     source:
       type: tarball
-      url: "https://github.com/strace/strace/releases/download/v{version}/strace-{version}.tar.gz"
+      url: "https://github.com/strace/strace/releases/download/v{version}/strace-{version}.tar.xz"
       strip_components: 1
     build_system: autotools
     tier: 0

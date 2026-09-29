@@ -55,6 +55,19 @@ jobs:
           mapfile -t scripts < <(git ls-files '*.sh')
           shellcheck --severity=error "${scripts[@]}"
 
+      # Regression gate (root cause A): every build script must be committed
+      # with the executable bit.  On Windows `core.fileMode=false` hides the
+      # real mode, so a missing +x only shows up on the Linux runner as a
+      # mysterious exit 126 -> assert it here in the git *index*.
+      - name: git executable bit on build scripts
+        run: |
+          bad=0
+          while IFS= read -r f; do
+            mode=$(git ls-files -s -- "$f" | awk '{print $1}')
+            [ "$mode" = "100755" ] || { echo "::error file=$f::git mode is $mode, expected 100755"; bad=1; }
+          done < <(git ls-files 'build/**/*.sh')
+          exit $bad
+
       - name: actionlint
         uses: raven-actions/actionlint@v2
         with:

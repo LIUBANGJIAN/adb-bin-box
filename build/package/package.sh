@@ -161,10 +161,13 @@ for tool_dir in "$DIST"/*/; do
     printf 'This archive contains one directory per Android ABI. Install the\n'
     printf 'binary that matches the device (adb shell getprop ro.product.cpu.abi).\n\n'
     printf 'Install on device:\n'
+    ridx=0
     for abi in "${abis_present[@]}"; do
+      pbin="${picked_bins_present[$ridx]}"
       printf '  # %s\n' "$abi"
-      printf '  adb push %s/%s /data/local/tmp/%s\n' "$abi" "$bin_name" "$bin_name"
-      printf '  adb shell chmod +x /data/local/tmp/%s\n' "$bin_name"
+      printf '  adb push %s/%s /data/local/tmp/%s\n' "$abi" "$pbin" "$pbin"
+      printf '  adb shell chmod +x /data/local/tmp/%s\n' "$pbin"
+      ridx=$((ridx + 1))
     done
     printf '\nOr push the whole archive and unpack on the device:\n'
     printf '  adb push %s-%s-android.tar.gz /data/local/tmp/\n' "$tool" "$version"

@@ -135,7 +135,7 @@ export REPO_ROOT SRC_DIR BUILD_DIR PREFIX ZIG_TARGET ABI TOOL_ID TOOL_BIN TOOL_V
 for dep in "${DEP_IDS[@]+"${DEP_IDS[@]}"}"; do
   [ -n "$dep" ] || continue
   log "building dependency: $dep"
-  "$SCRIPT_DIR/../systems/deps.sh" \
+  bash "$SCRIPT_DIR/../systems/deps.sh" \
     --dep "$dep" \
     --abi "$ABI" \
     --tools "$MANIFEST" \
@@ -194,7 +194,7 @@ run_commands "$BUILD_DIR" "${HOOK_POST_INSTALL[@]+"${HOOK_POST_INSTALL[@]}"}"
 
 log "resolving artifacts..."
 ARTIFACT_LIST=""
-if ! ARTIFACT_LIST="$("$DETECT_ARTIFACT_SH" \
+if ! ARTIFACT_LIST="$(bash "$DETECT_ARTIFACT_SH" \
       --tool "$TOOL_ID" --abi "$ABI" --bin "$TOOL_BIN" \
       --prefix "$PREFIX" --build-dir "$BUILD_DIR" \
       --staging "$STAGING" --dist "$DIST_TOOL_DIR" \
@@ -234,7 +234,7 @@ fi
 if [ "$SKIP_SMOKE" -eq 0 ]; then
   while IFS= read -r artifact; do
     [ -n "$artifact" ] || continue
-    smoke_cmd=("$SMOKE_TEST_SH" --bin "$artifact" --abi "$ABI"
+    smoke_cmd=(bash "$SMOKE_TEST_SH" --bin "$artifact" --abi "$ABI"
                --expect-exit "$SMOKE_EXPECT_EXIT")
     for arg in "${SMOKE_ARGS[@]+"${SMOKE_ARGS[@]}"}"; do
       smoke_cmd+=(--arg "$arg")

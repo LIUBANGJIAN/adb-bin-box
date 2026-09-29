@@ -126,11 +126,12 @@ first_file = assets[0]["file"] if assets else "curl-<version>-android.tar.gz"
 first_tool = assets[0]["tool"] if assets else "curl"
 
 # Derive the ABI set actually shipped from the manifest itself, so selective
-# builds (e.g. only curl on 2 ABIs) never over-promise a fixed count.
+# builds (e.g. only curl on 2 ABIs) never over-promise a fixed count.  The
+# degrade path uses the sentinel "(in archive)" which is not a real ABI -> skip.
 abi_seen = []
 for a in assets:
     for x in a.get("abis", []):
-        if x and x not in abi_seen:
+        if x and not x.startswith("(") and x not in abi_seen:
             abi_seen.append(x)
 abi_seen.sort()
 abi_count = len(abi_seen)
@@ -159,12 +160,19 @@ def accel_url(fname):
 lines = []
 lines.append("# adb-bin-box %s" % tag)
 lines.append("")
-lines.append("Android 命令行工具的**静态二进制**合集，本次共 **%d 个库**、"
-             "覆盖 **%d 个 ABI**（%s），用 `adb push` 到设备即可直接运行"
-             "（无需 root、无动态依赖）。" % (len(assets), abi_count, abi_inline))
-lines.append("")
-lines.append("> 每个压缩包 = **一个库**，包内按 ABI 分成子目录"
-             "（%s — 仅包含本次实际编译的 ABI）。" % abi_inline)
+if abi_count:
+    lines.append("Android 命令行工具的**静态二进制**合集，本次共 **%d 个库**、"
+                 "覆盖 **%d 个 ABI**（%s），用 `adb push` 到设备即可直接运行"
+                 "（无需 root、无动态依赖）。" % (len(assets), abi_count, abi_inline))
+    lines.append("")
+    lines.append("> 每个压缩包 = **一个库**，包内按 ABI 分成子目录"
+                 "（%s — 仅包含本次实际编译的 ABI）。" % abi_inline)
+else:
+    lines.append("Android 命令行工具的**静态二进制**合集，本次共 **%d 个库**，"
+                 "用 `adb push` 到设备即可直接运行（无需 root、无动态依赖）。"
+                 % len(assets))
+    lines.append("")
+    lines.append("> 每个压缩包 = **一个库**，包内按 ABI 分成子目录（见下表）。")
 lines.append("")
 lines.append("## 资产一览")
 lines.append("")
