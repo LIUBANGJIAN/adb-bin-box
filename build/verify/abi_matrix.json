@@ -5,7 +5,9 @@
     "machine_name": "AArch64",
     "bits": 64,
     "qemu": "qemu-aarch64-static",
-    "runner": "ubuntu-24.04"
+    "runner": "ubuntu-24.04",
+    "autotools_host": "aarch64-linux-musl",
+    "karch": "arm64"
   },
   "armeabi-v7a": {
     "zig_target": "arm-linux-musleabihf",
@@ -13,7 +15,9 @@
     "machine_name": "ARM",
     "bits": 32,
     "qemu": "qemu-arm-static",
-    "runner": "ubuntu-24.04"
+    "runner": "ubuntu-24.04",
+    "autotools_host": "arm-linux-musleabihf",
+    "karch": "arm"
   },
   "x86_64": {
     "zig_target": "x86_64-linux-musl",
@@ -21,7 +25,9 @@
     "machine_name": "x86_64",
     "bits": 64,
     "qemu": null,
-    "runner": "ubuntu-24.04"
+    "runner": "ubuntu-24.04",
+    "autotools_host": "x86_64-linux-musl",
+    "karch": "x86"
   },
   "x86": {
     "zig_target": "x86-linux-musl",
@@ -29,6 +35,8 @@
     "machine_name": "i386",
     "bits": 32,
     "qemu": null,
-    "runner": "ubuntu-24.04"
+    "runner": "ubuntu-24.04",
+    "autotools_host": "i686-linux-musl",
+    "karch": "x86"
   }
 }

@@ -162,6 +162,13 @@ apply_kv TOOL_ENV_KV
 setup_zig_env
 
 # --------------------------------------------------------------------------- #
+# 4b. De-shadow zig's (older) Linux UAPI with the tool's fresh bundled copy     #
+# --------------------------------------------------------------------------- #
+# No-op unless the manifest declares `uapi_fresh` (currently only strace, whose
+# bundled linux/sched.h is newer than zig's and must win to define CLONE_AUTOREAP).
+mirror_fresh_uapi ${UAPI_FRESH[@]+"${UAPI_FRESH[@]}"}
+
+# --------------------------------------------------------------------------- #
 # 5. Build via the build-system driver                                        #
 # --------------------------------------------------------------------------- #
 DRIVER_FILE="$SYSTEMS_DIR/$BUILD_SYSTEM.sh"

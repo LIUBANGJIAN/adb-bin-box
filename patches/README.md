@@ -24,9 +24,10 @@ Three patches are currently in use (each `tools.yml` entry lists its own):
 - `stress-ng-arch-typo.patch` — upstream's `core-helper.c` calls
   `stress_get_arch()`, but the real function is `stress_arch_get()`; the broken
   call sites only compile in our cross build, so fix the word order.
-- `stress-ng-linker-muldefs.patch` — the Makefile's `STATIC=1` LDFLAGS uses the
-  GNU-ld-only `-z muldefs` behind an `override`; zig's cc driver rejects `-z`
-  outright, so pass the equivalent lld flag `-Wl,--allow-multiple-definition`.
+- `stress-ng-drop-muldefs.patch` — the Makefile's `STATIC=1` LDFLAGS hardcodes
+  the GNU-ld-only `-z muldefs` behind an `override`; zig's cc driver rejects
+  `-z` outright, and it equally rejects the lld replacement
+  `--allow-multiple-definition`, so the flag must simply be removed.
 - `strace-bundled-btrfs-include.patch` — `src/btrfs.c` must include strace's
   bundled UAPI headers (`bundled/linux/include/uapi/linux/btrfs.h` and
   `btrfs_tree.h`) by quoted relative path, because zig's own older

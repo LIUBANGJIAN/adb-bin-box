@@ -180,6 +180,22 @@ tools:
     env:
       CC_FOR_BUILD: gcc
     patches: ["strace-bundled-btrfs-include.patch"]
+    # zig 0.16.0 bundles a Linux UAPI snapshot so old that it lacks constants
+    # strace's build depends on (measured on CI: "src/xlat/clone3_flags.h: error:
+    # use of undeclared identifier 'CLONE_AUTOREAP'").  strace ships its own,
+    # newer copy of the UAPI headers under bundled/linux, but configure only adds
+    # it as `-isystem`, and zig's cc driver resolves <linux/*.h> / <asm/*.h> to
+    # its own libc copy regardless of -I/-isystem order.  The build engine's
+    # `mirror_fresh_uapi` therefore copies these fresh roots straight OVER zig's
+    # copies before configure runs (see build/engine/common.sh):
+    #   * the generic tree (linux/*.h including sched.h with CLONE_AUTOREAP);
+    #   * the kernel-arch tree arch/<karch>/include/uapi (only asm/fcntl.h, but
+    #     it must beat zig's arch asm/ header) — ${karch} comes from
+    #     build/verify/abi_matrix.json.  strace ships no arch/x86 tree, so that
+    #     root is simply skipped on the x86/x86_64 jobs.
+    uapi_fresh:
+      - "bundled/linux/include/uapi"
+      - "bundled/linux/arch/${karch}/include/uapi"
     configure:
       flags:
         - "--enable-bundled=yes"
@@ -220,11 +236,13 @@ tools:
     # sites sit in the `#else` of `#if defined(HAVE_UNAME) &&
     # defined(HAVE_SYS_UTSNAME_H)`, so upstream's normal Linux build never
     # compiles them -- our cross build (feature undefined) does. Fix word order.
-    # Second patch: the Makefile's STATIC=1 LDFLAGS uses GNU-ld-only `-z muldefs`
-    # behind an `override`, so it cannot be overridden on the make command line;
-    # zig's cc driver rejects `-z` outright ("unsupported linker extension flag"),
-    # the equivalent lld flag is -Wl,--allow-multiple-definition.
-    patches: ["stress-ng-arch-typo.patch", "stress-ng-linker-muldefs.patch"]
+    # Second patch: the Makefile's STATIC=1 LDFLAGS hardcodes GNU-ld-only
+    # `-z muldefs` behind an `override`, so it cannot be neutralised from the
+    # make command line.  zig's cc driver rejects `-z` outright ("unsupported
+    # linker extension flag"), and it ALSO rejects the lld spelling that
+    # replaces it ("unsupported linker arg: --allow-multiple-definition"), so
+    # the only option left is to drop the flag entirely.
+    patches: ["stress-ng-arch-typo.patch", "stress-ng-drop-muldefs.patch"]
     configure: {}
     make:
       targets: ["all"]

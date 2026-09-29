@@ -38,9 +38,12 @@ driver_configure() {
   mkdir -p "$BUILD_DIR"
   cd "$BUILD_DIR"
 
-  log "configure: host=$ZIG_TARGET build=$AC_BUILD prefix=$PREFIX"
+  # `--host` is the GNU triple (AT_HOST), which is normally ZIG_TARGET but may
+  # differ where an upstream configure script whitelists CPU names — e.g. strace
+  # rejects host_cpu `x86` but accepts `i686` (see build/verify/abi_matrix.json).
+  log "configure: host=${AT_HOST:-$ZIG_TARGET} build=$AC_BUILD prefix=$PREFIX"
   "$cfg" \
-    --host="$ZIG_TARGET" \
+    --host="${AT_HOST:-$ZIG_TARGET}" \
     --build="$AC_BUILD" \
     --prefix="$PREFIX" \
     ${CONFIGURE_FLAGS[@]+"${CONFIGURE_FLAGS[@]}"}

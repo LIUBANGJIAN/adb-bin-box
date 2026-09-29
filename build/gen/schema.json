@@ -128,6 +128,13 @@
         "make": { "$ref": "#/$defs/make" },
         "hooks": { "$ref": "#/$defs/hooks" },
         "patches": { "type": "array", "items": { "type": "string" } },
+        "uapi_fresh": {
+          "description": "Bundled Linux UAPI roots (relative to $SRC_DIR) to mirror over zig's older copies. String or list of strings.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
         "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifactRule" } },
         "smoke": { "$ref": "#/$defs/smoke" },
         "abi_overrides": {

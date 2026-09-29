@@ -242,3 +242,87 @@ setup_zig_env() {
   log "zig: $zig_bin ($($zig_bin version 2>/dev/null || echo '?')) target=$ZIG_TARGET"
   log "zig cache: global=$ZIG_GLOBAL_CACHE_DIR local=$ZIG_LOCAL_CACHE_DIR"
 }
+
+# --------------------------------------------------------------------------- #
+# Linux UAPI de-shadowing (system_design.md §3.6 addendum)                     #
+# --------------------------------------------------------------------------- #
+# mirror_fresh_uapi <fresh_root> [<fresh_root> ...]
+#
+# Some tools ship a *newer* snapshot of the Linux UAPI headers than the one zig
+# 0.16.0 bundles.  strace is the canonical case: its build needs CLONE_AUTOREAP
+# (defined in its bundled linux/sched.h, kernel 7.x) but zig's own copy of
+# linux/sched.h predates it.  `configure` already puts the bundled roots on the
+# compiler search path, yet zig's cc driver still resolves <linux/*.h> and
+# <asm/*.h> to its OWN libc copy regardless of -I/-isystem ordering (measured:
+# "use of undeclared identifier 'CLONE_AUTOREAP'" survived the -isystem flags).
+# The only reliable fix is to MIRROR the fresh files straight over zig's copies.
+#
+# Each <fresh_root> is relative to $SRC_DIR.  A root that does not exist (e.g.
+# strace bundles no arch/x86 UAPI tree) is skipped with a warning; if NOTHING
+# is mirrored at all we die, so a broken path can never silently no-op.
+mirror_fresh_uapi() {
+  [ "$#" -gt 0 ] || return 0
+  local zig_bin="${ZIG_BIN:-$(command -v zig || true)}"
+  [ -n "$zig_bin" ] || die "mirror_fresh_uapi: zig not found (ZIG_BIN unset)"
+  local py
+  py="$(resolve_python)"
+
+  # `zig env` prints zig-object syntax (`.lib_dir = "..."`), not JSON — match
+  # either form with a tolerant regex so this survives a future format change.
+  local lib_dir
+  lib_dir="$("$zig_bin" env 2>/dev/null | "$py" -c '
+import re, sys
+m = re.search(r"lib_dir\"?\s*[:=]\s*\"([^\"]+)\"", sys.stdin.read())
+sys.stdout.write(m.group(1) if m else "")
+' || true)"
+  [ -n "$lib_dir" ] || die "mirror_fresh_uapi: could not read lib_dir from 'zig env'"
+  local inc="$lib_dir/libc/include"
+  [ -d "$inc" ] || die "mirror_fresh_uapi: zig libc include dir not found: $inc"
+
+  local total_over=0 total_add=0
+  local root fresh rel dest_dir parent
+  for root in "$@"; do
+    [ -n "$root" ] || continue
+    fresh="$SRC_DIR/$root"
+    if [ ! -d "$fresh" ]; then
+      warn "mirror_fresh_uapi: root absent, skipping: $root"
+      continue
+    fi
+    local n_over=0 n_add=0
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      for dest_dir in "$inc"/*/; do
+        [ -d "$dest_dir" ] || continue
+        if [ -e "${dest_dir}${rel}" ]; then
+          cp -f "$fresh/$rel" "${dest_dir}${rel}"
+          n_over=$((n_over + 1))
+        else
+          parent="$(dirname "${dest_dir}${rel}")"
+          # Only add into a directory that already carries this header family;
+          # an empty dir (e.g. an unused asm/ stub) is never populated, so the
+          # generic "any" tree is not polluted with arch-specific headers.
+          if [ -d "$parent" ] && [ -n "$(ls -A "$parent" 2>/dev/null || true)" ]; then
+            cp -f "$fresh/$rel" "${dest_dir}${rel}"
+            n_add=$((n_add + 1))
+          fi
+        fi
+      done
+    done < <(cd "$fresh" && find . -type f | sed 's|^\./||' | sort)
+    if [ "$((n_over + n_add))" -eq 0 ]; then
+      warn "mirror_fresh_uapi: root matched nothing in zig's include tree: $root"
+    fi
+    total_over=$((total_over + n_over))
+    total_add=$((total_add + n_add))
+    log "mirror_fresh_uapi: $root -> overridden=$n_over added=$n_add"
+  done
+
+  [ "$((total_over + total_add))" -gt 0 ] \
+    || die "mirror_fresh_uapi: nothing mirrored (no fresh UAPI matched zig's include tree)"
+  log "mirror_fresh_uapi: done overridden=$total_over added=$total_add"
+
+  # Evidence line: prove the exact header the strace build tripped over is fresh.
+  local probe="$inc/any-linux-any/linux/sched.h"
+  if [ -f "$probe" ]; then
+    log "mirror_fresh_uapi: CLONE_AUTOREAP in zig linux/sched.h = $(grep -c CLONE_AUTOREAP "$probe" 2>/dev/null || true)"
+  fi
+}

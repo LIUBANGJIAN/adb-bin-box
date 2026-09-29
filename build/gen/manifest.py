@@ -146,6 +146,14 @@ class AbiSpec:
     bits: int
     qemu: Optional[str]
     runner: str
+    # ``autotools_host`` is the GNU triple passed to ``./configure --host=``.
+    # It is *not* always identical to ``zig_target``: some upstream configure
+    # scripts whitelist CPU names (e.g. strace only accepts ``i[[3456]]86``, so
+    # ``x86-linux-musl`` -> host_cpu ``x86`` is rejected while ``i686-linux-musl``
+    # works).  ``karch`` is the Linux kernel arch name strace uses to locate its
+    # bundled ``arch/<karch>/include/uapi`` tree (``arm64``/``arm``/``x86``).
+    autotools_host: Optional[str] = None
+    karch: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -156,6 +164,8 @@ class AbiSpec:
             "bits": self.bits,
             "qemu": self.qemu,
             "runner": self.runner,
+            "autotools_host": self.autotools_host or self.zig_target,
+            "karch": self.karch,
         }
 
 
@@ -187,6 +197,10 @@ class AbiMatrix:
                 bits=int(entry["bits"]),
                 qemu=entry.get("qemu"),
                 runner=str(entry.get("runner", "ubuntu-24.04")),
+                autotools_host=(
+                    str(entry["autotools_host"]) if entry.get("autotools_host") else None
+                ),
+                karch=str(entry.get("karch", "")),
             )
         if not specs:
             raise ManifestError("ABI matrix %s is empty" % path)
@@ -340,6 +354,7 @@ def normalize_tool(
         "make": normalize_make(raw.get("make")),
         "hooks": normalize_hooks(raw.get("hooks")),
         "patches": as_str_list(raw.get("patches")),
+        "uapi_fresh": as_str_list(raw.get("uapi_fresh")),
         "artifacts": normalize_artifacts(raw.get("artifacts")),
         "smoke": normalize_smoke(raw.get("smoke")),
         "abi_overrides": raw.get("abi_overrides") or {},
@@ -580,6 +595,9 @@ def emit_shell(
     mapping.setdefault("ZIG_TARGET", abi_spec.zig_target)
     if not mapping.get("ZIG_TARGET"):
         mapping["ZIG_TARGET"] = abi_spec.zig_target
+    # ``${karch}`` lets a tool entry point at its per-ABI bundled kernel-arch
+    # UAPI tree (see strace's ``uapi_fresh`` in tools.yml).
+    mapping["karch"] = abi_spec.karch
 
     deps = manifest.resolve_deps(tool_id, abi)
     dep_ids = [d["id"] for d in deps]
@@ -602,6 +620,7 @@ def emit_shell(
 
     lines.append(_sh_scalar("ABI", abi))
     lines.append(_sh_scalar("ZIG_TARGET", abi_spec.zig_target))
+    lines.append(_sh_scalar("AT_HOST", abi_spec.autotools_host or abi_spec.zig_target))
     lines.append(_sh_scalar("E_MACHINE", abi_spec.e_machine))
     lines.append(_sh_scalar("ABI_BITS", abi_spec.bits))
     lines.append(_sh_scalar("ABI_MACHINE_NAME", abi_spec.machine_name))
@@ -634,6 +653,7 @@ def emit_shell(
         )
 
     lines.append(_sh_array("PATCHES", spec["patches"]))
+    lines.append(_sh_array("UAPI_FRESH", _tokens(spec["uapi_fresh"], mapping)))
 
     art_paths = _tokens([a["path"] for a in spec["artifacts"]], mapping)
     lines.append(_sh_array("ARTIFACT_PATHS", art_paths))
