@@ -155,20 +155,34 @@ tools:
     #    (src/Makefile.am: `ioctlent%.h: ioctlsort%` -> `./$< > $@`), so it has to
     #    be compiled by a HOST compiler.  AX_PROG_CC_FOR_BUILD (configure.ac:342)
     #    honours a CC_FOR_BUILD override.
-    # 2. The btrfs xlat tables reference kernel constants that only strace's OWN
-    #    bundled UAPI headers define: BTRFS_FEATURE_INCOMPAT_REMAP_TREE
+    # 2. The btrfs xlat tables (src/xlat/btrfs_*.h, all compiled into src/btrfs.o)
+    #    reference kernel constants that only strace's OWN bundled UAPI headers
+    #    define: BTRFS_FEATURE_INCOMPAT_REMAP_TREE
     #    (bundled/linux/include/uapi/linux/btrfs.h) and BTRFS_BLOCK_GROUP_REMAPPED /
     #    BTRFS_BLOCK_GROUP_METADATA_REMAP / BTRFS_REMAP_TREE_OBJECTID
-    #    (bundled/linux/include/uapi/linux/btrfs_tree.h).  configure does add those
-    #    dirs, but only as -isystem, so the libc's own (older) <linux/btrfs*.h>
-    #    still wins the search.  Promote the bundled dir with -I, which outranks
-    #    every -isystem directory.  ($SRC_DIR is a manifest token, expanded by
-    #    build/gen/manifest.py at emit time.)
+    #    (bundled/linux/include/uapi/linux/btrfs_tree.h).
+    #
+    #    configure DOES enable that bundled tree here (its probe compares zig's
+    #    6.19 <linux/version.h> against the bundled 7.x one and fails, so
+    #    st_cv_use_bundled_headers=yes), but it injects the dirs only as
+    #    `-isystem` (upstream 2024-10-26, "use -isystem instead of -I for bundled
+    #    Linux UAPI headers" -- motive was warning suppression only).  zig's cc
+    #    driver resolves <linux/btrfs*.h> to its own older UAPI copies anyway, so
+    #    both headers stay shadowed.  Measured: adding -I<bundled dir> to CPPFLAGS
+    #    (what this entry did up to a66d71e) changed nothing at all.
+    #    patches/strace-bundled-btrfs-include.patch therefore makes src/btrfs.c
+    #    include the bundled headers by quoted RELATIVE path, which no -I /
+    #    -isystem ordering can override, and the identical include guards then
+    #    neutralise the angle-bracket includes.
+    #
+    # --enable-bundled=yes pins the intent (it only feeds that same probe), so a
+    # future zig whose UAPI catches up cannot silently flip it off.
     env:
       CC_FOR_BUILD: gcc
-      CPPFLAGS: "-I$SRC_DIR/bundled/linux/include/uapi"
+    patches: ["strace-bundled-btrfs-include.patch"]
     configure:
       flags:
+        - "--enable-bundled=yes"
         - "--enable-static"
         - "--disable-shared"
         - "--without-libunwind"

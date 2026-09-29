@@ -1,0 +1,30 @@
+--- a/src/btrfs.c
++++ b/src/btrfs.c
+@@ -14,7 +14,26 @@
+ #include DEF_MPERS_TYPE(struct_btrfs_ioctl_timespec)
+ #include DEF_MPERS_TYPE(struct_btrfs_ioctl_vol_args_v2)
+ 
+-#include <linux/btrfs_tree.h>
++/*
++ * adb-bin-box: include strace's *bundled* UAPI headers explicitly, by relative
++ * path, instead of relying on the <linux/btrfs*.h> search path.
++ *
++ * configure injects the bundled tree only as `-isystem` (strace commit
++ * "build: use -isystem instead of -I for bundled Linux UAPI headers",
++ * 2024-10-26, which cared about warning suppression only).  Zig's cc driver
++ * resolves <linux/btrfs.h> and <linux/btrfs_tree.h> to its own older UAPI
++ * copies first, and those do not define BTRFS_FEATURE_INCOMPAT_REMAP_TREE,
++ * BTRFS_REMAP_TREE_OBJECTID, BTRFS_BLOCK_GROUP_REMAPPED or
++ * BTRFS_BLOCK_GROUP_METADATA_REMAP.
++ *
++ * A quoted include is resolved relative to *this file* first, which no -I /
++ * -isystem ordering can override.  Both headers share their include guards with
++ * the kernel copies (_LINUX_BTRFS_H / _BTRFS_CTREE_H_), so the angle-bracket
++ * includes they pull in below become no-ops.  Order matters: btrfs.h first,
++ * because btrfs_tree.h itself does `#include <linux/btrfs.h>`.
++ */
++#include "../bundled/linux/include/uapi/linux/btrfs.h"
++#include "../bundled/linux/include/uapi/linux/btrfs_tree.h"
+ 
+ typedef struct btrfs_ioctl_dev_replace_args
+ 	struct_btrfs_ioctl_dev_replace_args;

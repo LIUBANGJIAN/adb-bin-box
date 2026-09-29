@@ -100,6 +100,17 @@ jobs:
               "$(grep -n -E ':[0-9]+:[0-9]+: (error|fatal error):|error: |Error [0-9]+$|undefined reference|cannot find -|No such file or directory' "$LOG" | tail -n 16 | cut -c1-220 | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'BEGIN{ORS="%0A"}{print}')"
             printf '::error::log tail:%s\n' \
               "$(tail -n 18 "$LOG" | cut -c1-200 | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'BEGIN{ORS="%0A"}{print}')"
+            # Self-diagnosis: print the include-path flags the generated
+            # sub-Makefile actually ended up with, plus configure's
+            # bundled-header probe result.  Both would have answered the strace
+            # btrfs failure without spending a second CI run.
+            SUBMK="$RUNNER_TEMP/work/build/${{ inputs.tool_id }}/${{ inputs.abi }}/src/Makefile"
+            if [ -f "$SUBMK" ]; then
+              printf '::error::effective flags:%s\n' \
+                "$(grep -n -E '^(AM_CPPFLAGS|CPPFLAGS|bundled_CPPFLAGS|am__append_1) *=' "$SUBMK" | cut -c1-600 | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'BEGIN{ORS="%0A"}{print}')"
+            fi
+            printf '::error::bundled-header probe:%s\n' \
+              "$(grep -n -m2 -i 'bundled linux kernel headers' "$LOG" | cut -c1-300 | sed -e 's/%/%25/g' -e 's/\r$//' | awk 'BEGIN{ORS="%0A"}{print}')"
           fi
           exit "$status"
 
