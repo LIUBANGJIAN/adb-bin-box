@@ -27,7 +27,9 @@ Three patches are currently in use (each `tools.yml` entry lists its own):
 - `stress-ng-drop-muldefs.patch` — the Makefile's `STATIC=1` LDFLAGS hardcodes
   the GNU-ld-only `-z muldefs` behind an `override`; zig's cc driver rejects
   `-z` outright, and it equally rejects the lld replacement
-  `--allow-multiple-definition`, so the flag must simply be removed.
+  `--allow-multiple-definition`, so no form of the flag reaches the linker
+  through `zig cc`.  The patch removes it and adds `-fcommon` (the compile-time
+  equivalent for tentative definitions) as a safety net.
 - `strace-bundled-btrfs-include.patch` — `src/btrfs.c` must include strace's
   bundled UAPI headers (`bundled/linux/include/uapi/linux/btrfs.h` and
   `btrfs_tree.h`) by quoted relative path, because zig's own older

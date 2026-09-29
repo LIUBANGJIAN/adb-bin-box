@@ -252,10 +252,11 @@ setup_zig_env() {
 # 0.16.0 bundles.  strace is the canonical case: its build needs CLONE_AUTOREAP
 # (defined in its bundled linux/sched.h, kernel 7.x) but zig's own copy of
 # linux/sched.h predates it.  `configure` already puts the bundled roots on the
-# compiler search path, yet zig's cc driver still resolves <linux/*.h> and
-# <asm/*.h> to its OWN libc copy regardless of -I/-isystem ordering (measured:
-# "use of undeclared identifier 'CLONE_AUTOREAP'" survived the -isystem flags).
-# The only reliable fix is to MIRROR the fresh files straight over zig's copies.
+# compiler search path, but only as `-isystem`, and with that ordering zig's own
+# libc copy still won the lookup (measured: "use of undeclared identifier
+# 'CLONE_AUTOREAP'" survived those flags).  Rather than depend on include-path
+# ordering, MIRROR the fresh files straight over zig's copies — order-independent
+# and therefore the only reliable fix.
 #
 # Each <fresh_root> is relative to $SRC_DIR.  A root that does not exist (e.g.
 # strace bundles no arch/x86 UAPI tree) is skipped with a warning; if NOTHING
