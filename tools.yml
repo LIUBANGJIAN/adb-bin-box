@@ -647,6 +647,13 @@ tools:
       flags:
         - "--disable-shared"
         - "--enable-static"
+    make:
+      # `make install` recurses into docs/ and dies on docs/nload.1: the Debian
+      # "pristine orig" tarball ships no pre-generated man page (upstream only
+      # generates it in a git checkout). That has nothing to do with the binary,
+      # so install the programs only — `install-exec` is automake's
+      # binaries-but-no-data target.
+      install_target: "install-exec"
     smoke:
       # nload has NO --version flag; -h/--help prints the banner (which carries
       # the version) and exits 0. Verified in src/main.cpp of 0.7.4.
@@ -941,12 +948,16 @@ tools:
     configure: {}
     hooks:
       pre_configure:
-        # conf_options.c prints `__DATE__`/`__TIME__`, and zig cc promotes
-        # -Wdate-time to an error, so `-v` would never compile. Replace the two
-        # macros with fixed strings: a build timestamp is useless on-device and
-        # non-reproducible anyway.
+        # `__DATE__`/`__TIME__` appear in TWO files, in two different syntactic
+        # shapes, and zig cc promotes -Wdate-time to an error so either one
+        # breaks the build:
+        #   conf_options.c:524  printf(..., VERSION, __DATE__, __TIME__)
+        #   display-help.c:39   "Version " VERSION " (build date " __DATE__ " " __TIME__ ")"
+        # Replacing each macro with its own "unknown" string literal is valid in
+        # both places (bare argument / string concatenation). Only patching
+        # conf_options.c is what kept horst red on all four ABIs.
         - |
-          sed -i 's/__DATE__, __TIME__/"unknown", "unknown"/' conf_options.c
+          sed -i 's/__DATE__/"unknown"/g; s/__TIME__/"unknown"/g' *.c
       pre_build:
         # 1) only ncursesw is built by this repo, upstream links -lncurses.
         # 2) horst's .objdeps.mk rule shells out to the HOST `gcc -MM`; an empty

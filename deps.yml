@@ -158,7 +158,22 @@ deps:
       arm64-v8a:   { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-aarch64" } }
       armeabi-v7a: { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-armv4" } }
       x86_64:      { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-x86_64" } }
-      x86:         { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-elf" } }
+      # 3) `-mcx16` on x86 only. crypto/threads_pthread.c implements
+      #    CRYPTO_atomic_add64/and/or/load/store as
+      #        if (__atomic_is_lock_free(sizeof(*val), val)) { __atomic_*_fetch(...) }
+      #    On 32-bit x86 clang cannot decide lock-freedom at compile time, so it
+      #    emits a call to __atomic_is_lock_free and a __atomic_*_8 libcall —
+      #    and zig ships NO libatomic (`-latomic` fails the same way, verified
+      #    locally against zig 0.16.0). `apps/openssl` then died with
+      #    "ld.lld: error: undefined symbol: __atomic_is_lock_free".
+      #    -mcx16 tells clang cmpxchg8b is available (universally true on any
+      #    CPU Android x86 runs on), so the builtin folds to a constant and the
+      #    8-byte RMW inlines. Verified locally: without it the symbol is
+      #    undefined, with it the link succeeds. Configure passes unknown
+      #    `-`-options straight into CFLAGS, so appending it is enough.
+      #    (Not mixed with a CFLAGS= make variable — that combination is the one
+      #    thing openssl's Configure refuses.)
+      x86:         { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-elf -mcx16" } }
     notes: "`no-asm` trades ~10-20% AES/SHA throughput for a build with no per-ABI perlasm/nasm wiring. Consumers: drill (libcrypto/libssl) and stunnel. Both need LDFLAGS cleared and --libdir=lib (see configure)."
 
   # ---------------------------------------------------------------------------
