@@ -87,6 +87,7 @@ jobs:
       zig_target: ${{ matrix.zig_target }}
       runner: ${{ matrix.runner }}
       job_name: ${{ matrix.job_name }}
+      build_system: ${{ matrix.build_system }}
 
   # --------------------------------------------------------------------------
   # 3. Collect every artifact, rebuild dist/, and produce one archive per tool.
