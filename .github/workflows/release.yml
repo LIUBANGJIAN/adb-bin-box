@@ -184,8 +184,27 @@ jobs:
             --out dist/_packages/RELEASE_NOTES.md \
             --proxy "https://gh-proxy.com/"
 
-      # Delete every OTHER release before creating this one, so only the newest
-      # survives. Never touches KEEP_TAG (the tag we are about to publish).
+      # Publish FIRST, purge second.
+      #
+      # The purge used to run before this step, which meant a failed upload (rate
+      # limit, network, a bad archive) left the repository with ZERO releases:
+      # the old one was already deleted and the new one never appeared. Creating
+      # the release first makes the weekly run non-destructive — if publishing
+      # fails, the previous version is still downloadable.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "adb-bin-box ${{ needs.prepare.outputs.tag }}"
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          body_path: dist/_packages/RELEASE_NOTES.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/_packages/*.tar.gz
+            dist/_packages/SHA256SUMS
+            dist/_packages/manifest.json
+
+      # Delete every OTHER release, so only the newest survives. Never touches
+      # KEEP_TAG (the tag we just published).
       - name: Purge old releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -204,15 +223,3 @@ jobs:
             gh release delete "$t" --yes --cleanup-tag || echo "  (skip $t)"
           done < /tmp/old_tags.txt
           echo "purge done"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "adb-bin-box ${{ needs.prepare.outputs.tag }}"
-          tag_name: ${{ needs.prepare.outputs.tag }}
-          body_path: dist/_packages/RELEASE_NOTES.md
-          fail_on_unmatched_files: true
-          files: |
-            dist/_packages/*.tar.gz
-            dist/_packages/SHA256SUMS
-            dist/_packages/manifest.json
