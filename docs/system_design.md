@@ -416,6 +416,7 @@ classDiagram
 | `smoke.args` | string[] | ➖ | 默认 `[--version]` |
 | `smoke.expect_exit` | int | ➖ | 默认 `0` |
 | `smoke.contains` | string | ➖ | 期望 stdout 含子串 |
+| `smoke.skip_artifacts` | string[] | ➖ | 按产物名（dist 名）跳过冒烟；用于 `--version` 都要先开 raw socket 的助手程序（如 `mtr-packet`）。产物仍会入 dist 并通过 ELF 门禁 |
 | `abi_overrides.<abi>.*` | map | ➖ | 针对某 ABI 覆盖上述任意字段（深合并） |
 | `notes` | string | ➖ | 备注（写进产物 README.txt） |
 

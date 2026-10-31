@@ -298,6 +298,7 @@ def normalize_smoke(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "args": args if args else list(DEFAULT_SMOKE_ARGS),
         "expect_exit": int(sm.get("expect_exit", DEFAULT_SMOKE_EXPECT_EXIT)),
         "contains": sm.get("contains"),
+        "skip_artifacts": as_str_list(sm.get("skip_artifacts")),
     }
 
 
@@ -679,6 +680,7 @@ def emit_shell(
     lines.append(_sh_array("SMOKE_ARGS", spec["smoke"]["args"]))
     lines.append(_sh_scalar("SMOKE_EXPECT_EXIT", spec["smoke"]["expect_exit"]))
     lines.append(_sh_scalar("SMOKE_CONTAINS", spec["smoke"]["contains"] or ""))
+    lines.append(_sh_array("SMOKE_SKIP_ARTIFACTS", spec["smoke"]["skip_artifacts"]))
 
     env_kv = [
         "%s=%s" % (k, expand_tokens(v, mapping)) for k, v in spec["env"].items()

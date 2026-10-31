@@ -112,6 +112,23 @@ untar() {
   tar -xf "$archive" -C "$dest" --strip-components="$strip" $flag
 }
 
+archive_is_readable() {
+  # archive_is_readable <archive>
+  #
+  # True only when tar can actually read the archive's table of contents.
+  # `curl -f` catches 4xx/5xx but NOT the other failure mode seen in CI: a
+  # mirror answering 200 with a short HTML error page (zlib.net under parallel
+  # load returned 11 KB of HTML for a 1.5 MB tarball).  That used to surface as
+  # a confusing "tar: This does not look like a tar archive" several steps
+  # later, so the download is now validated before it is extracted.
+  #
+  # GNU tar auto-detects gzip/xz/bzip2 on read, so no format flag is needed and
+  # this works even though mktemp gives the file no extension.
+  local archive="$1"
+  [ -s "$archive" ] || return 1
+  tar -tf "$archive" >/dev/null 2>&1
+}
+
 clone_source() {
   # clone_source <url> <ref> <dest>
   local url="$1" ref="$2" dest="$3"
@@ -144,10 +161,32 @@ fetch_source() {
       ;;
     tarball | "")
       require_cmd curl
-      local tmp
+      local tmp attempt max_attempts ok
       tmp="$(mktemp -t adbbinbox.XXXXXX)"
-      log "$label: downloading $url"
-      curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 -o "$tmp" "$url"
+      max_attempts="${FETCH_ATTEMPTS:-3}"
+      ok=0
+      attempt=1
+      while [ "$attempt" -le "$max_attempts" ]; do
+        log "$label: downloading $url (attempt $attempt/$max_attempts)"
+        # Keep a partial/HTML body from being treated as success: validate the
+        # archive itself, not just curl's exit code (see archive_is_readable).
+        if curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 \
+                -o "$tmp" "$url" && archive_is_readable "$tmp"; then
+          ok=1
+          break
+        fi
+        warn "$label: download attempt $attempt failed or produced an unreadable archive"
+        rm -f "$tmp"
+        tmp="$(mktemp -t adbbinbox.XXXXXX)"
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le "$max_attempts" ]; then
+          sleep "$((attempt * 3))"
+        fi
+      done
+      if [ "$ok" -ne 1 ]; then
+        rm -f "$tmp"
+        die "$label: could not download a readable archive from $url after $max_attempts attempts"
+      fi
       log "$label: extracting -> $dest (strip=$strip)"
       rm -rf "$dest"
       untar "$tmp" "$dest" "$strip"

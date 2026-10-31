@@ -100,7 +100,12 @@
       "properties": {
         "args": { "type": "array", "items": { "type": "string" } },
         "expect_exit": { "type": "integer" },
-        "contains": { "type": "string" }
+        "contains": { "type": "string" },
+        "skip_artifacts": {
+          "description": "Artifact basenames (dist names, e.g. 'mtr-packet') that must NOT be smoke-tested, because the single per-tool assertion cannot hold for them — typically a helper that needs CAP_NET_RAW or root before it will even parse --version. The artifact is still staged, ELF-gated and shipped.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
       }
     },
     "toolEntry": {

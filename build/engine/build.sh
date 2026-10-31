@@ -241,6 +241,20 @@ fi
 if [ "$SKIP_SMOKE" -eq 0 ]; then
   while IFS= read -r artifact; do
     [ -n "$artifact" ] || continue
+    # One assertion per tool is applied to every staged artifact, which is
+    # wrong for helpers that cannot start unprivileged at all (mtr-packet opens
+    # raw sockets before it parses --version). Manifest opt-out per artifact.
+    smoke_skip=0
+    for skip in "${SMOKE_SKIP_ARTIFACTS[@]+"${SMOKE_SKIP_ARTIFACTS[@]}"}"; do
+      if [ -n "$skip" ] && [ "$(basename "$artifact")" = "$skip" ]; then
+        smoke_skip=1
+        break
+      fi
+    done
+    if [ "$smoke_skip" -eq 1 ]; then
+      log "smoke: skipped for $(basename "$artifact") (manifest smoke.skip_artifacts)"
+      continue
+    fi
     smoke_cmd=(bash "$SMOKE_TEST_SH" --bin "$artifact" --abi "$ABI"
                --expect-exit "$SMOKE_EXPECT_EXIT")
     for arg in "${SMOKE_ARGS[@]+"${SMOKE_ARGS[@]}"}"; do

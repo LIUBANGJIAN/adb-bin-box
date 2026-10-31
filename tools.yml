@@ -583,12 +583,18 @@ tools:
     smoke:
       args: ["--version"]
       contains: "mtr 0.96"
+      # mtr-packet opens its raw sockets in main() BEFORE getopt runs, so even
+      # `mtr-packet --version` dies with "Failure to open IPv4 sockets" on an
+      # unprivileged runner (exit 1). The single per-tool assertion therefore
+      # cannot hold for the helper; it is still staged, ELF-gated and shipped.
+      skip_artifacts: ["mtr-packet"]
     notes: "Ships BOTH mtr and mtr-packet; mtr-packet needs CAP_NET_RAW or root. --report/--json are the useful modes on a phone."
 
   # ---------------------------------------------------------------------------
-  # nload — live per-interface bandwidth meter. Chosen over iftop because it
-  # needs NO libpcap / ncurses (reads /proc/net/dev) and iftop's upstream
-  # download host is long dead. Zero deps, tiny, works unrooted.
+  # nload — live per-interface bandwidth meter. Chosen over iftop because
+  # iftop's upstream download host is long dead and it needs libpcap; nload
+  # reads /proc/net/dev instead, so it needs NO libpcap and works unrooted.
+  # It still renders through ncurses (one requirement, not two).
   # ---------------------------------------------------------------------------
   - id: nload
     name: nload
@@ -601,6 +607,15 @@ tools:
     build_system: autotools
     tier: 0
     bin: nload
+    # nload's configure.in hard-requires the plain (narrow) ncurses names:
+    #   AC_CHECK_LIB(ncurses, initscr) + AC_CHECK_LIB(form, new_form)
+    #   AC_CHECK_HEADERS([... curses.h form.h ...])
+    # and has no --with-ncursesw switch. This repo's ncurses dep is widec-only,
+    # so libncurses.a / libform.a simply do not exist and configure aborted with
+    # "ncurses library or development files not found". The hook below creates
+    # the narrow-name aliases (headers are already flat thanks to
+    # --enable-overwrite), which is what the debian package does too.
+    deps: [ncurses]
     hooks:
       # nload 0.7.4 ships a config.sub from 2004 that predates musl, so configure
       # dies with "config.sub aarch64-linux-musl failed" before compiling a line.
@@ -614,6 +629,18 @@ tools:
             for d in /usr/share/misc /usr/share/libtool/build-aux /usr/share/automake-*; do
               if [ -f "$d/$f" ]; then cp -f "$d/$f" "$f" && break; fi
             done
+          done
+          true
+        # Narrow-name aliases for the widec-only ncurses in $PREFIX.
+        # ncursesw.a exports initscr/new_form, so a symlink is enough — and it
+        # is idempotent, which matters because $PREFIX is shared by every tool
+        # in the same ABI job.
+        - |
+          for lib in ncurses form; do
+            [ -e "$PREFIX/lib/lib$lib.a" ] || { [ -e "$PREFIX/lib/lib${lib}w.a" ] && ln -sf "lib${lib}w.a" "$PREFIX/lib/lib$lib.a"; }
+          done
+          for hdr in curses.h form.h panel.h; do
+            [ -e "$PREFIX/include/$hdr" ] || { [ -e "$PREFIX/include/ncursesw/$hdr" ] && ln -sf "ncursesw/$hdr" "$PREFIX/include/$hdr"; }
           done
           true
     configure:
@@ -648,16 +675,20 @@ tools:
     enabled: true
     deps: [libpcap, ncurses]
     configure: {}
-    hooks:
-      pre_build:
-        # nethogs links `-lncurses` explicitly; this repo only builds the
-        # wide-char ncursesw, so the link step failed with "unable to find static
-        # system library 'ncurses'". Rewrite the flag instead of patching upstream
-        # (same treatment as horst).
-        - 'sed -i "s/-lncurses\b/-lncursesw/g" Makefile'
     make:
       targets: ["nethogs"]
       install_target: ""
+      # nethogs 0.8.7 links `-lncurses` through src/MakeApp.mk, which defines it
+      # as `NCURSES_LIBS?=-lncurses`. Because it is a `?=` assignment, overriding
+      # it on the make command line is the sanctioned hook — no source patching.
+      # (The previous pre_build sed edited ./Makefile, but the flag lives in
+      # src/MakeApp.mk, so it silently changed nothing and the link still asked
+      # for the non-existent libncurses.a.)
+      #
+      # VERSION comes from determineVersion.sh, which shells out to `git
+      # describe`; a codeload tarball has no .git, so the banner compiled to an
+      # empty string (-DVERSION=""). Pin it explicitly.
+      args: ["NCURSES_LIBS=-lncursesw", "VERSION=0.8.7"]
     artifacts:
       - path: "src/nethogs"
         bin_name: "nethogs"
@@ -665,7 +696,8 @@ tools:
     smoke:
       args: ["-V"]
       expect_exit: 0
-    notes: "C++ cross build via zig c++ (one of the riskier ones). Links ncursesw via a Makefile hook. Needs root for packet capture."
+      contains: "version 0.8.7"
+    notes: "C++ cross build via zig c++ (one of the riskier ones). Links ncursesw via a src/MakeApp.mk variable override. Needs root for packet capture."
 
   # ---------------------------------------------------------------------------
   # rsync — incremental sync between phone and host. Only zlib is kept; openssl
@@ -821,10 +853,19 @@ tools:
         - "--with-ssl=$PREFIX"
         - "--without-pyldns"
         - "--disable-gost"
+    # ldns' default `all` builds ONLY libldns — `drill` lives in its own target
+    # (Makefile.in: `drill: setup-builddir no-drill-config-h drill/drill
+    # drill/drill.1`) and has its own installer (`install-drill`, which copies
+    # drill/drill to $(bindir)). Plain `make && make install` therefore produced
+    # a perfect libldns install and no binary at all, and artifact resolution
+    # failed on bin/drill.
+    make:
+      targets: ["drill"]
+      install_target: "install-drill"
     smoke:
       args: ["-v"]
       expect_exit: 0
-    notes: "`drill -T` bypasses a broken stub resolver by querying recursively over TCP. LDNS itself is not shipped as a library, only the CLI."
+    notes: "`drill -T` bypasses a broken stub resolver by querying recursively over TCP. Builds the `drill` target explicitly (not part of `all`) and installs with install-drill; LDNS itself is not shipped as a library, only the CLI."
 
   # ---------------------------------------------------------------------------
   # socat — the missing plumbing tool: TCP/UDP/UNIX relays, port forwarding,
@@ -852,8 +893,21 @@ tools:
       BUILD_DATE: "2026-01-01 00:00:00"
     # The script driver already runs in-source (BUILD_DIR == SRC_DIR), so a plain
     # ./configure is enough; make/make install come from the driver defaults.
+    #
+    # The zigcc wrapper is NOT cosmetic. socat's Makefile.in:113 compiles procan
+    # with
+    #     $(CC) $(CFLAGS) -c -D CC=\"$(CC)\" -o procan.o procan.c
+    # The escaped \" are literal quotes to sh, so they protect nothing: when CC
+    # contains a space ("zig cc -target aarch64-linux-musl") the word splits into
+    #   CC="/…/zig   cc   -target   aarch64-linux-musl"
+    # and zig is handed the target `aarch64-linux-musl"` (trailing quote), which
+    # dies with "unable to parse target query … UnknownApplicationBinaryInterface".
+    # A space-free wrapper keeps the define in one piece.
     configure:
-      command: "./configure --prefix=\"$PREFIX\" --host=\"$ZIG_TARGET\" --disable-openssl --disable-readline"
+      command: |
+        printf '#!/bin/sh\nexec zig cc -target "%s" "$@"\n' "$ZIG_TARGET" > zigcc
+        chmod +x zigcc
+        CC="$PWD/zigcc" ./configure --prefix="$PREFIX" --host="$ZIG_TARGET" --disable-openssl --disable-readline
     smoke:
       args: ["-V"]
       contains: "socat version 1.8.0.0"
