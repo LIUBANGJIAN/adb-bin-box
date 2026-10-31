@@ -6,6 +6,10 @@
 
 目标工具（Phase 1）：`curl` · `htop` · `iperf3` · `strace` · `stress-ng`
 
+已加入清单（默认参与构建）：`sqlite3` · `jq` · `fio` · `memtester` · `nano` · `pv` · `ncdu` · `tcpdump` · `mtr` · `nload` · `rsync` · `tcping` · `nethogs` · `dropbear` · `drill` · `socat` · `horst` · `stunnel` · `ngrep` · `arp-scan`
+
+> 合计 **25 个工具**（原 5 + 新增 20），其中新增依赖两个：`libpcap`（tcpdump/mtr/nethogs/horst/ngrep/arp-scan）、`openssl`（drill/stunnel/dropbear/可选 curl TLS），另加 `pcre`（仅 ngrep）。视频类（ffmpeg）暂不纳入。
+
 ---
 
 ## 为什么是静态 + musl + Zig
@@ -17,6 +21,8 @@
 | **Zig 内置交叉工具链** | `zig cc -target <triple>` 一条命令自带 musl + compiler-rt + lld，**无需下载任何第三方工具链**（CI 里 musl.cc 已被封，NDK 路线已排除） |
 
 > 只要设备内核 syscall 兼容，同一个静态二进制即可覆盖 Android 4.4 ~ 15，无需按 API level 分别构建。
+>
+> **关于两端越界（实测，2026-10）**：Android 15+ 引入的 16 KB page size 已核查 —— `arm64-v8a` / `armeabi-v7a` 产物的 `PT_LOAD p_align` 为 `0x10000`（64 KB），满足 16 KB 页要求，因此 16/17 **技术上无障碍但尚未真机验证**（CI 只做 QEMU user-mode 冒烟）。Android 2.x **不在支持范围**：当时内核 2.6.32/2.6.35 低于 musl 基线 2.6.39，且产物为 `armeabi-v7a` hard-float，ARMv6 设备会 `SIGILL`。
 
 ---
 
@@ -24,7 +30,7 @@
 
 ### 1. 触发构建
 
-* **CI（推荐）**：推送到 `main` / 提 PR / 手动 `workflow_dispatch` 即自动跑 `.github/workflows/build.yml`，矩阵由 `tools.yml` 动态生成（5 库 × 4 ABI = 20 个并行 job，`fail-fast: false`）。
+* **CI（推荐）**：推送到 `main` / 提 PR / 手动 `workflow_dispatch` 即自动跑 `.github/workflows/build.yml`，矩阵由 `tools.yml` 动态生成（当前 25 库 × 4 ABI = **100 个并行 job**，`fail-fast: false`）。
 * **选择性编译**：手动 `workflow_dispatch` 时只编指定的库 / ABI（见「选择性编译」）。
 * **发布**：打 `v*` tag（如 `v2026.09.29`）触发 `release.yml`，生成 GitHub Release 资产。⚠️ **每次发布会自动删除旧 release，只保留最新一个**（见「发布行为」）。
 
@@ -116,6 +122,15 @@ curl -fLO https://gh-proxy.com/https://github.com/LIUBANGJIAN/adb-bin-box/releas
 | **htop** | **/proc 字段受限** | 非 root 下读不到其它进程的部分 `/proc/<pid>`（如 `cmdline`、`environ`），进程列表与自身信息正常 |
 | **stress-ng** | **部分 stressor 需 root / 被 seccomp 拦截** | 内存/CPU stressor 通常可用；涉及 `io_uring`、`mount`、网络命名空间等的 stressor 在 Android 10+ 的 **seccomp** 或权限下会被拒绝。失败会明确报错，属预期 |
 | **全部** | Android 10+ seccomp | 新系统对部分 syscall 有过滤，个别工具特性可能不可用（已按 §限制 逐项披露） |
+| **tcpdump / mtr / nethogs** | **需要 root** | 抓包走 `AF_PACKET` 原始套接字，非 root 无法打开；`tcpdump -r file.pcap` 离线解析不需要 root。`mtr` 需要 `CAP_NET_RAW`（无 cap 辅助程序时等同 root） |
+| **nload / tcping** | 无需 root | `nload` 只读 `/proc/net/dev`；`tcping` 是普通 TCP connect，任何 uid 都能用 |
+| **rsync** | **无 ssh 传输** | 只带 zlib，`--disable-openssl`，因此不能用 `-e ssh`；走本地路径或 `rsync://`（需对端跑 rsyncd） |
+| **sqlite3** | 读 app 数据库需权限 | `/data/data/<pkg>/databases/*` 只有该 app uid 或 root 可读；可用 `adb shell run-as <pkg>` 或 root |
+| **nano / ncdu** | 终端依赖 | 需要能用 `TERM` 的 shell（adb shell 默认可用）；`ncdu` 扫描 `/data` 同样受文件权限限制 |
+| **drill** | 无 root 可用 | **这是本项目 DNS 短板的解药**：`drill -T example.com` 自己发查询、不读 `/etc/resolv.conf`，可直接判定"是解析坏了还是网络坏了" |
+| **horst / ngrep / arp-scan** | **需要 root** | horst 还需网卡进入 monitor 模式（多数原厂 ROM 不支持）；ngrep 可用 `-I file` 离线分析；arp-scan 走原始套接字 |
+| **socat / stunnel** | 无需 root（高位端口） | socat 做端口转发/PTY 桥接；stunnel 需自备证书与配置文件，适合给明文服务套 TLS |
+| **dropbear** | **需要 root** | 监听 22 端口需特权；host key 目录须可写（如 `/data/local/tmp/dropbear`），用 `-R` 走公钥认证 |
 
 > 结论：**`--version` 类验证一定可用；真正干活取决于目标功能是否需要 root / 域名解析 / TLS。**
 

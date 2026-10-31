@@ -275,3 +275,653 @@ tools:
       args: ["--version"]
       contains: "0.22.01"
     notes: "No zlib (Phase 2 enhancement). Some stressors need root; Android 10+ seccomp blocks others (see README)."
+
+  # ===========================================================================
+  # Batch A — zero-new-dependency tools (Tier 0/1, plus two that reuse the
+  # already-built static ncursesw).  Adding these touches only this file.
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # sqlite3 — the single most useful debugging CLI on a phone: it reads the
+  # databases that every Android app ships under /data/data/<pkg>/databases.
+  # autotools, plain C, no deps. `--disable-tcl` is mandatory (otherwise it
+  # looks for a Tcl shell just to build the test bindings), `--disable-readline`
+  # drops the readline dependency (the CLI then loses line editing only).
+  # NOTE: sqlite's tarball name is NOT a straight {version} substitution
+  # (3.46.1 -> sqlite-autoconf-3460100), so the URL is written out in full.
+  # ---------------------------------------------------------------------------
+  - id: sqlite
+    name: sqlite3
+    version: "3.46.1"
+    repo: sqlite/sqlite
+    source:
+      type: tarball
+      url: "https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 0
+    bin: sqlite3
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+        - "--disable-tcl"
+        - "--disable-readline"
+    smoke:
+      args: ["--version"]
+      contains: "3.46.1"
+    notes: "Reads app databases directly: sqlite3 /data/data/<pkg>/databases/<db> (needs root or run-as)."
+
+  # ---------------------------------------------------------------------------
+  # jq — JSON on the command line; invaluable for /proc-style and API output.
+  # `--with-oniguruma=builtin` uses the copy vendored inside jq's dist tarball,
+  # so no oniguruma dep is needed. `--disable-docs` avoids ronn/ruby.
+  # ---------------------------------------------------------------------------
+  - id: jq
+    name: jq
+    version: "1.7.1"
+    repo: jqlang/jq
+    source:
+      type: tarball
+      url: "https://github.com/jqlang/jq/releases/download/jq-{version}/jq-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 1
+    bin: jq
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+        - "--with-oniguruma=builtin"
+        - "--disable-docs"
+        - "--disable-maintainer-mode"
+    smoke:
+      args: ["--version"]
+      contains: "jq-1.7.1"
+    notes: "builtin oniguruma only. If a future dist tarball drops vendor/, add oniguruma to deps.yml instead."
+
+  # ---------------------------------------------------------------------------
+  # fio — storage / IO benchmark. Built through the `script` driver ON PURPOSE:
+  # fio's configure is a hand-written shell script that does not really support
+  # VPATH builds, so in-tree (BUILD_DIR == SRC_DIR for non-autotools drivers) is
+  # the reliable path. `--disable-native` makes the fallback paths explicit and
+  # keeps configure from trusting host CPU detection during cross builds.
+  # ---------------------------------------------------------------------------
+  - id: fio
+    name: fio
+    version: "3.36"
+    repo: axboe/fio
+    source:
+      type: tarball
+      url: "https://github.com/axboe/fio/archive/refs/tags/fio-{version}.tar.gz"
+      strip_components: 1
+    build_system: script
+    tier: 1
+    bin: fio
+    # fio's configure is hand-written and `*) echo "Bad option"; exit 1`s on
+    # anything it does not know. libaio/libnbd are OPT-IN upstream (libaio=no by
+    # default), so passing --disable-libaio/--disable-libnbd is a hard failure.
+    # Only the genuinely opt-out features are listed below.
+    configure:
+      command: "./configure --disable-native --disable-gfapi --disable-rados --disable-rbd --disable-http --disable-libzbc --disable-pmem --disable-xnvme"
+    artifacts:
+      - path: "fio"
+        bin_name: "fio"
+        required: true
+    smoke:
+      args: ["--version"]
+      contains: "fio-3.36"
+    notes: "libaio is absent on musl/Android by design; posix-aio + sync engines remain. Risky probe set — first candidate if a job goes red."
+
+  # ---------------------------------------------------------------------------
+  # memtester — memory stability check. Plain Makefile, but it does NOT honour
+  # $CC: it reads conf-cc / conf-ld (Makefile line 13-14). The hooks below
+  # materialise those two files from the exported zig CC so the build stays
+  # per-ABI without patching upstream.
+  # ---------------------------------------------------------------------------
+  - id: memtester
+    name: memtester
+    version: "4.5.1"
+    repo: jnavila/memtester
+    source:
+      type: tarball
+      url: "https://github.com/jnavila/memtester/archive/refs/tags/v{version}.tar.gz"
+      strip_components: 1
+    build_system: make
+    tier: 0
+    bin: memtester
+    configure: {}
+    hooks:
+      pre_build:
+        - "printf '%s\\n' \"$CC\" > conf-cc"
+        - "printf '%s\\n' \"$CC\" > conf-ld"
+    make:
+      targets: ["memtester"]
+      install_target: ""
+    artifacts:
+      - path: "memtester"
+        bin_name: "memtester"
+        required: true
+    smoke:
+      args: ["--help"]
+      expect_exit: 1
+    notes: "Upstream tags stop at v4.5.1 (no v4.6.0 tag exists). conf-cc/conf-ld are generated by hooks; zig cc links musl targets statically by default."
+
+  # ---------------------------------------------------------------------------
+  # nano — on-device editor for build.prop / hosts / conf files. Reuses the
+  # static ncursesw already built for htop (Tier 2, no new dependency).
+  # ---------------------------------------------------------------------------
+  - id: nano
+    name: nano
+    version: "8.1"
+    repo: mirror/nano
+    source:
+      type: tarball
+      url: "https://www.nano-editor.org/dist/v8/nano-{version}.tar.xz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: nano
+    deps: [ncurses]
+    configure:
+      # nano does NOT use libtool, so --disable-shared/--enable-static are not
+      # real options here (configure would just warn). Static linking comes from
+      # the engine's -static in LDFLAGS.
+      flags:
+        - "--disable-nls"
+        - "--enable-utf8"
+        - "--disable-speller"
+        - "--disable-justify"
+    smoke:
+      args: ["--version"]
+      contains: "GNU nano"
+    notes: "--disable-justify drops the regex-based justify feature (keeps it lean); re-enable if needed."
+
+  # ---------------------------------------------------------------------------
+  # pv — pipe progress meter; makes `adb shell dd`/`tar` pipelines observable.
+  # Very small, autotools, no deps. 1.9.x moved to meson, so 1.6.x is the
+  # autotools-friendly line.
+  # ---------------------------------------------------------------------------
+  - id: pv
+    name: pv
+    version: "1.6.20"
+    repo: a-j-wood/pv
+    source:
+      type: tarball
+      url: "https://www.ivarch.com/programs/sources/pv-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 0
+    bin: pv
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+        - "--disable-nls"
+    smoke:
+      args: ["--version"]
+      contains: "1.6.20"
+    notes: "1.6.x line for autotools; 1.9+ requires meson and is not worth the extra driver surface."
+
+  # ---------------------------------------------------------------------------
+  # ncdu — interactive disk usage (finds what is eating /data). 1.x is C +
+  # ncurses (reuses the existing static build); 2.x is a Zig program and would
+  # need a brand-new driver, so it stayed on 1.x.
+  # ---------------------------------------------------------------------------
+  - id: ncdu
+    name: ncdu
+    version: "1.20"
+    repo: rofl0r/ncdu
+    source:
+      type: tarball
+      url: "https://dev.yorhel.nl/download/ncdu-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: ncdu
+    deps: [ncurses]
+    configure:
+      # ncdu 1.x has no libtool either; only the ncursesw selector is real.
+      flags:
+        - "--with-ncursesw"
+    smoke:
+      args: ["--version"]
+      contains: "ncdu 1.20"
+    notes: "1.x (C). 2.x is Zig-based and out of scope for this engine."
+
+  # ===========================================================================
+  # Batch B — tools that need the new Tier-2 deps (libpcap / openssl) or the
+  # existing zlib / ncurses.  libpcap is the highest-leverage addition: it
+  # unlocks the whole "look at the wire" category.
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # tcpdump — packet capture. Needs root (raw sockets) on Android; without root
+  # it can only read a pcap file with `-r`. Crypto/smi are switched off: SMB
+  # decryption and SMI MIBs add deps for zero value on a phone.
+  # ---------------------------------------------------------------------------
+  - id: tcpdump
+    name: tcpdump
+    version: "4.99.5"
+    repo: the-tcpdump-group/tcpdump
+    source:
+      type: tarball
+      url: "https://www.tcpdump.org/release/tcpdump-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: tcpdump
+    deps: [libpcap]
+    configure:
+      flags:
+        # tcpdump 4.99.5 uses AC_ARG_WITH for these, so the switch is
+        # --without-X, NOT --disable-X (--disable-smi is silently ignored and
+        # would leave libsmi probing enabled). There is no smiv2 option at all
+        # in 4.99.5 — that arrived with the 5.x libsmi2 split.
+        - "--without-crypto"
+        - "--without-smi"
+        - "--without-cap-ng"
+    smoke:
+      args: ["--version"]
+      contains: "tcpdump version 4.99.5"
+    notes: "Needs root. Typical: tcpdump -i any -n -s0 -w /data/local/tmp/x.pcap"
+
+  # ---------------------------------------------------------------------------
+  # mtr — ping + traceroute in one view (per-hop loss/latency). Needs libpcap
+  # (raw sockets) and ncurses (curses UI with --curses). jansson/gtk are off.
+  # ---------------------------------------------------------------------------
+  - id: mtr
+    name: mtr
+    version: "0.96"
+    repo: traviscross/mtr
+    source:
+      # mtr publishes NO release assets (only git tags), so the release-download
+      # URL 404s; the archive endpoint is the only working source.
+      type: tarball
+      url: "https://github.com/traviscross/mtr/archive/refs/tags/v{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: mtr
+    deps: [libpcap, ncurses]
+    configure:
+      bootstrap:
+        - "autoreconf -fi"
+      flags:
+        - "--without-jansson"
+        - "--without-gtk"
+    # mtr is a two-binary tool: `mtr` shells out to `mtr-packet` for raw-socket
+    # I/O. Staging only `mtr` yields a binary that fails at runtime.
+    artifacts:
+      - path: "bin/mtr"
+        bin_name: "mtr"
+        required: true
+      - path: "bin/mtr-packet"
+        bin_name: "mtr-packet"
+        required: true
+    smoke:
+      args: ["--version"]
+      contains: "mtr 0.96"
+    notes: "Ships BOTH mtr and mtr-packet; mtr-packet needs CAP_NET_RAW or root. --report/--json are the useful modes on a phone."
+
+  # ---------------------------------------------------------------------------
+  # nload — live per-interface bandwidth meter. Chosen over iftop because it
+  # needs NO libpcap / ncurses (reads /proc/net/dev) and iftop's upstream
+  # download host is long dead. Zero deps, tiny, works unrooted.
+  # ---------------------------------------------------------------------------
+  - id: nload
+    name: nload
+    version: "0.7.4"
+    repo: rofl0r/nload
+    source:
+      type: tarball
+      url: "https://deb.debian.org/debian/pool/main/n/nload/nload_{version}.orig.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 0
+    bin: nload
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+    smoke:
+      # nload has NO --version flag; -h/--help prints the banner (which carries
+      # the version) and exits 0. Verified in src/main.cpp of 0.7.4.
+      args: ["-h"]
+      expect_exit: 0
+      contains: "nload version 0.7.4"
+    notes: "Unrooted-friendly (reads /proc/net/dev). Upstream www.rofl0r.de no longer resolves, so the Debian pristine orig tarball is used (verified 200)."
+
+  # ---------------------------------------------------------------------------
+  # nethogs — per-process bandwidth. C++ (zig c++), libpcap + ncurses. Kept
+  # DISABLED: its Makefile hardcodes g++ in places and the C++ cross probe has
+  # never been exercised by this engine. Flip enabled:true on a scratch branch
+  # first — it must not turn the main CI red.
+  # ---------------------------------------------------------------------------
+  - id: nethogs
+    name: nethogs
+    version: "0.8.7"
+    repo: raboof/nethogs
+    source:
+      type: tarball
+      url: "https://github.com/raboof/nethogs/archive/refs/tags/v{version}.tar.gz"
+      strip_components: 1
+    build_system: make
+    tier: 2
+    bin: nethogs
+    enabled: true
+    deps: [libpcap, ncurses]
+    configure: {}
+    make:
+      targets: ["nethogs"]
+      install_target: ""
+    artifacts:
+      - path: "src/nethogs"
+        bin_name: "nethogs"
+        required: true
+    smoke:
+      args: ["-V"]
+      expect_exit: 0
+    notes: "First reddish candidate: C++ cross build unproven. Needs root for packet capture."
+
+  # ---------------------------------------------------------------------------
+  # rsync — incremental sync between phone and host. Only zlib is kept; openssl
+  # (ssh transport), lz4, zstd and xxhash are disabled so no new dep is needed
+  # (use -e "ssh" is irrelevant here — raw rsync:// / local paths still work).
+  # ---------------------------------------------------------------------------
+  - id: rsync
+    name: rsync
+    version: "3.3.0"
+    repo: RsyncProject/rsync
+    source:
+      type: tarball
+      url: "https://download.samba.org/pub/rsync/src/rsync-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: rsync
+    deps: [zlib]
+    configure:
+      flags:
+        - "--disable-openssl"
+        - "--disable-lz4"
+        - "--disable-zstd"
+        - "--disable-xxhash"
+        - "--with-included-popt"
+        - "--disable-md2man"
+    smoke:
+      args: ["--version"]
+      contains: "version 3.3.0"
+    notes: "No ssh transport (no openssl/libssh); use it over local paths or rsync:// against an rsyncd."
+
+  # ---------------------------------------------------------------------------
+  # dropbear — small SSH server/client (dropbear, dbclient, dropbearkey, scp).
+  # Its configure is hand-written and refuses VPATH builds, so it runs through
+  # the `script` driver in-tree. utmp/wtmp/lastlog/syslog do not exist on
+  # Android and are all disabled. zlib off by default (compression is optional).
+  # Runtime needs a writable host key dir (see notes) and root to bind :22.
+  # ---------------------------------------------------------------------------
+  - id: dropbear
+    name: dropbear
+    version: "2024.86"
+    repo: mkj/dropbear
+    source:
+      type: tarball
+      url: "https://matt.ucc.asn.au/dropbear/releases/dropbear-{version}.tar.bz2"
+      strip_components: 1
+    build_system: script
+    tier: 1
+    bin: dropbear
+    enabled: true
+    configure:
+      command: "./configure --prefix=\"$PREFIX\" --host=\"$ZIG_TARGET\" --disable-zlib --disable-syslog --disable-utmp --disable-wtmp --disable-lastlog --disable-utmpx --disable-wtmpx --disable-pututline --disable-pututxline"
+    # All nine --disable-* switches were checked against dropbear's generated
+    # configure. --host flips it into cross mode (no run-time probes); PROGRAMS
+    # is a make variable, so it belongs in make.args, not in the configure step.
+    make:
+      args:
+        - "PROGRAMS=dropbear dbclient dropbearkey dropbearconvert scp"
+        - "STATIC=1"
+    artifacts:
+      - path: "dropbear"
+        bin_name: "dropbear"
+        required: true
+      - path: "dbclient"
+        bin_name: "dbclient"
+        required: true
+      - path: "dropbearkey"
+        bin_name: "dropbearkey"
+        required: true
+      - path: "scp"
+        bin_name: "scp"
+        required: false
+    smoke:
+      args: ["-V"]
+      expect_exit: 0
+    notes: "Unproven: the utmp-less configure path. Run with -r /data/local/tmp/dropbear and -R for authorized_keys; root required for :22."
+
+  # ===========================================================================
+  # tcping — TCP-level "ping" (connect + RTT/loss). Go, so it is a static
+  # binary with no libc surface at all: strictly more portable than any C build.
+  # The `go` driver has existed in the engine but had no user until now.
+  # ===========================================================================
+  - id: tcping
+    name: tcping
+    version: "2.5.0"
+    repo: pouriyajamshidi/tcping
+    source:
+      type: git
+      url: "https://github.com/pouriyajamshidi/tcping"
+      tag: "v2.5.0"
+    build_system: go
+    tier: 0
+    bin: tcping
+    env:
+      CGO_ENABLED: "0"
+    smoke:
+      args: ["--version"]
+      expect_exit: 0
+    notes: "Go build (CGO_ENABLED=0) => zero libc deps, works on any ABI. If the tag is missing, bump both version and source.tag."
+
+  # ===========================================================================
+  # Network batch 2 — the "DNS / tunnel / on-wire" complement, now that libpcap
+  # and openssl are in the dep pool.  Priority order matches the README:
+  # drill (DNS is this project's biggest functional hole) > socat > horst >
+  # stunnel > ngrep > arp-scan.
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # drill (ldns) — DNS debugger. This is the tool that explains the project's
+  # own worst limitation: musl reads /etc/resolv.conf, Android has none, so DNS
+  # "just fails". `drill -T example.com` walks the tree over TCP and shows
+  # whether the failure is resolution, transport or the resolver config.
+  # Linking to openssl enables DNSSEC validation (drill -S).
+  # ---------------------------------------------------------------------------
+  - id: drill
+    name: drill
+    version: "1.8.3"
+    repo: NLnetLabs/ldns
+    source:
+      type: tarball
+      url: "https://www.nlnetlabs.nl/downloads/ldns/ldns-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: drill
+    deps: [openssl]
+    configure:
+      flags:
+        - "--disable-shared"
+        - "--enable-static"
+        - "--with-ssl=$PREFIX"
+        - "--without-pyldns"
+        - "--disable-gost"
+    smoke:
+      args: ["-v"]
+      expect_exit: 0
+    notes: "`drill -T` bypasses a broken stub resolver by querying recursively over TCP. LDNS itself is not shipped as a library, only the CLI."
+
+  # ---------------------------------------------------------------------------
+  # socat — the missing plumbing tool: TCP/UDP/UNIX relays, port forwarding,
+  # PTY bridging (e.g. expose a device-side socket over adb reverse).
+  # socat explicitly does NOT support out-of-tree builds, hence the script
+  # driver with an in-tree configure+make chain.
+  # ---------------------------------------------------------------------------
+  - id: socat
+    name: socat
+    version: "1.8.0.0"
+    repo: dest-unreach/socat
+    source:
+      type: tarball
+      url: "http://www.dest-unreach.org/socat/download/socat-{version}.tar.gz"
+      strip_components: 1
+    build_system: script
+    tier: 1
+    bin: socat
+    # The script driver already runs in-source (BUILD_DIR == SRC_DIR), so a plain
+    # ./configure is enough; make/make install come from the driver defaults.
+    configure:
+      command: "./configure --prefix=\"$PREFIX\" --host=\"$ZIG_TARGET\" --disable-openssl --disable-readline"
+    smoke:
+      args: ["-V"]
+      contains: "socat version 1.8.0.0"
+    notes: "No openssl/readline (keeps it dependency-free). Upstream is HTTP-only and has no out-of-tree support, which is fine: this driver builds in-tree."
+
+  # ---------------------------------------------------------------------------
+  # horst — 802.11 channel/neighbour scanner. Reuses libpcap + ncurses.
+  # Its Makefile hardcodes -lncurses, while this repo only builds the wide-char
+  # ncursesw; the hook rewrites the flag instead of patching upstream.
+  # ---------------------------------------------------------------------------
+  - id: horst
+    name: horst
+    version: "5.0"
+    repo: br101/horst
+    source:
+      type: tarball
+      url: "https://github.com/br101/horst/archive/refs/tags/version-{version}.tar.gz"
+      strip_components: 1
+    build_system: make
+    tier: 2
+    bin: horst
+    # horst needs NEITHER libpcap NOR libnl with this flag set, which is exactly
+    # why it is built this way:
+    #   PCAP=0  -> capture via raw AF_PACKET sockets (capture.c), libpcap unused
+    #   WEXT=1  -> ifctrl-wext.o instead of ifctrl-nl80211.o; the default
+    #              LIBNL=3.0 path would need libnl-3/libnl-genl-3, which are not
+    #              in the dep pool (and cannot be, on a musl static build)
+    # Trade-off: no nl80211 channel switching, only wireless-extensions ioctls,
+    # which many Android kernels ship disabled. Capture still works.
+    deps: [ncurses]
+    configure: {}
+    hooks:
+      pre_build:
+        # 1) only ncursesw is built by this repo, upstream links -lncurses.
+        # 2) horst's .objdeps.mk rule shells out to the HOST `gcc -MM`; an empty
+        #    up-to-date file stops that rule from ever firing.
+        - 'sed -i "s/-lncurses\b/-lncursesw/g" Makefile'
+        - ": > .objdeps.mk"
+    make:
+      args: ["PCAP=0", "WEXT=1", "DEBUG=0"]
+      targets: ["all"]
+      install_target: ""
+    artifacts:
+      - path: "horst"
+        bin_name: "horst"
+        required: true
+    smoke:
+      # horst's conf_options.c does `case 'h': print_usage(); exit(0);` — exit 0,
+      # not 1 (an earlier guess of 1 would have failed the job).
+      args: ["-h"]
+      expect_exit: 0
+    notes: "Builds raw-socket capture + wireless-extensions control (no libpcap, no libnl). Needs root and an interface already in monitor mode; nl80211 channel switching is NOT available in this configuration."
+
+  # ---------------------------------------------------------------------------
+  # stunnel — TLS wrapper for services that speak plaintext. Pairs with the
+  # fact that this project's curl has no TLS in Phase 1.
+  # libwrap/systemd/fips are off: none exist on Android.
+  # ---------------------------------------------------------------------------
+  - id: stunnel
+    name: stunnel
+    version: "5.82"
+    repo: mtrojnar/stunnel
+    source:
+      type: tarball
+      url: "https://github.com/mtrojnar/stunnel/archive/refs/tags/stunnel-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: stunnel
+    deps: [openssl]
+    configure:
+      flags:
+        - "--disable-libwrap"
+        - "--disable-systemd"
+        - "--disable-fips"
+        - "--with-ssl=$PREFIX"
+    smoke:
+      args: ["-version"]
+      expect_exit: 0
+    notes: "TLS termination/proxying on device. Needs a cert + a config file; runs fine unrooted on high ports."
+
+  # ---------------------------------------------------------------------------
+  # ngrep — grep for packet payloads (`ngrep -q 'GET /' port 80`). tcpdump +
+  # strings can fake it, but ngrep is the direct tool. Needs PCRE1.
+  # GitHub tarballs ship no ./configure, so the chain autoreconfs when needed.
+  # ---------------------------------------------------------------------------
+  - id: ngrep
+    name: ngrep
+    version: "1.47.0"
+    repo: jpr5/ngrep
+    source:
+      type: tarball
+      url: "https://github.com/jpr5/ngrep/archive/refs/tags/v{version}.tar.gz"
+      strip_components: 1
+    build_system: script
+    tier: 2
+    bin: ngrep
+    deps: [libpcap, pcre]
+    # Two traps here:
+    #  1) configure (generated 2017, autoconf 2.69) contains
+    #     `if test use_pcre = yes` — missing $, so --enable-pcre silently does
+    #     nothing and the bundled regex-0.12 path is taken instead. The tarball
+    #     SHIPS a pre-generated ./configure, so patch that file directly rather
+    #     than configure.in (regenerating would need autoconf and configure.in is
+    #     deprecated anyway).
+    #  2) musl has no glibc GNU-regex API, so PCRE is not optional here.
+    # --host puts configure in cross mode: the shipped config.sub resolves all
+    # four musl triples, and ngrep has no AC_TRY_RUN probes to skip.
+    # NB: the script driver ignores configure.flags — everything goes in command.
+    configure:
+      command: "./configure --prefix=\"$PREFIX\" --host=\"$ZIG_TARGET\" --enable-pcre"
+    hooks:
+      pre_configure:
+        - >-
+          sed -i.bak 's/test use_pcre = yes/test "x$use_pcre" = xyes/' configure
+    smoke:
+      args: ["-V"]
+      expect_exit: 0
+    notes: "PCRE1 (not PCRE2). Needs root for live capture; -I file works unrooted."
+
+  # ---------------------------------------------------------------------------
+  # arp-scan — L2 device discovery on the local segment (who is on this WiFi).
+  # Pairs naturally with tcpdump/mtr for on-site troubleshooting.
+  # ---------------------------------------------------------------------------
+  - id: arp-scan
+    name: arp-scan
+    version: "1.10.0"
+    repo: royhills/arp-scan
+    source:
+      type: tarball
+      url: "https://github.com/royhills/arp-scan/archive/refs/tags/{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    tier: 2
+    bin: arp-scan
+    deps: [libpcap]
+    configure:
+      bootstrap:
+        - "autoreconf -fi"
+    smoke:
+      args: ["--version"]
+      contains: "arp-scan 1.10.0"
+    notes: "GitHub tarball has no ./configure, so autoreconf runs first. Needs raw sockets (root)."
