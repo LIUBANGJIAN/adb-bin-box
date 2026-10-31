@@ -67,28 +67,97 @@ deps:
     notes: "Static libz.a only; consumed via -L$PREFIX/lib -lz."
 
   # ---------------------------------------------------------------------------
-  # openssl — Phase 2 enhancement for curl https.  Kept commented so Phase 1
-  # stays dependency-free; uncomment together with curl.features:[tls].
-  # OpenSSL has no autotools: it uses ./Configure <per-abi-target>.
+  # libpcap — REQUIRED by tcpdump / mtr / nethogs (Tier 2, see tools.yml).
+  # Everything that pulls a *new* dependency (libnl, dbus, rdma, bluetooth, usb,
+  # netmap, rpcapd) is switched off: none of it exists in a musl static build and
+  # each one adds a host-side probe that can silently succeed against the HOST
+  # headers and then fail at link time.
   # ---------------------------------------------------------------------------
-  # - id: openssl
-  #   version: "3.5.4"
-  #   repo: openssl/openssl
-  #   source:
-  #     type: tarball
-  #     url: "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz"
-  #     strip_components: 1
-  #   build_system: script
-  #   static: true
-  #   provides: [openssl, libcrypto, libssl]
-  #   configure:
-  #     command: "./Configure no-shared no-tests no-legacy --prefix=$PREFIX --openssldir=$PREFIX/ssl linux-aarch64"
-  #   make:
-  #     targets: ["build_sw"]
-  #     install_target: "install_sw"
-  #   abi_overrides:
-  #     arm64-v8a:   { configure: { command: "./Configure no-shared no-tests no-legacy --prefix=$PREFIX --openssldir=$PREFIX/ssl linux-aarch64" } }
-  #     armeabi-v7a: { configure: { command: "./Configure no-shared no-tests no-legacy --prefix=$PREFIX --openssldir=$PREFIX/ssl linux-armv4" } }
-  #     x86_64:      { configure: { command: "./Configure no-shared no-tests no-legacy --prefix=$PREFIX --openssldir=$PREFIX/ssl linux-x86_64" } }
-  #     x86:         { configure: { command: "./Configure no-shared no-tests no-legacy --prefix=$PREFIX --openssldir=$PREFIX/ssl linux-elf" } }
-  #   notes: "Phase 2. Per-ABI Configure target required; failures here must not block Phase 1."
+  - id: libpcap
+    version: "1.10.5"
+    repo: the-tcpdump-group/libpcap
+    source:
+      type: tarball
+      url: "https://www.tcpdump.org/release/libpcap-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    static: true
+    provides: [libpcap]
+    configure:
+      flags:
+        - "--enable-static"
+        - "--disable-shared"
+        - "--without-libnl"
+        - "--disable-dbus"
+        - "--disable-rdma"
+        - "--disable-bluetooth"
+        - "--disable-usb"
+        - "--disable-netmap"
+        - "--disable-remote"
+        - "--without-dag"
+        - "--without-septel"
+        - "--without-snf"
+        - "--without-dpdk"
+        - "--without-turbocap"
+    notes: "Static libpcap.a only. `--without-libnl` is mandatory: libnl is not in the dep pool and Android has no netlink headers matching libpcap's expectations."
+
+  # ---------------------------------------------------------------------------
+  # openssl — now enabled (Tier 2). Consumers: curl (features:[tls]), drill,
+  # stunnel, and rsync/dropbear optionally.
+  #
+  # OpenSSL has NO autotools and does NOT support out-of-tree (VPATH) builds.
+  # That is fine here because deps.sh always builds in-source (BUILD_DIR ==
+  # SRC_DIR); the script driver's ./Configure runs in $SRC_DIR as required, and
+  # the real targets are expressed through make.targets/install_target instead of
+  # being chained inside the configure command (deps.sh maps an empty
+  # install_target back to "install", so leaving it empty is NOT "skip").
+  # ---------------------------------------------------------------------------
+  - id: openssl
+    version: "3.5.4"
+    repo: openssl/openssl
+    source:
+      type: tarball
+      url: "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz"
+      strip_components: 1
+    build_system: script
+    static: true
+    provides: [openssl, libcrypto, libssl]
+    configure:
+      command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-aarch64"
+    make:
+      targets: ["build_sw"]
+      install_target: "install_sw"
+    abi_overrides:
+      arm64-v8a:   { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-aarch64" } }
+      armeabi-v7a: { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-armv4" } }
+      x86_64:      { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-x86_64" } }
+      x86:         { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-elf" } }
+    notes: "`no-asm` trades ~10-20% AES/SHA throughput for a build that needs no per-ABI perlasm/nasm wiring; drop it per-ABI once the pipeline is green. Phase 2 item — failures here must not block the Phase 1 tools."
+
+  # ---------------------------------------------------------------------------
+  # pcre (PCRE1) — REQUIRED by ngrep only. PCRE2 is a different, incompatible
+  # library; ngrep 1.47 links -lpcre. UTF + UCP are on because packet payloads
+  # are arbitrary bytes and Unicode property matching is cheap to enable.
+  # The source is a SourceForge mirror URL; fetch uses `curl -fL` so the 302
+  # to a rotating mirror is handled.
+  # ---------------------------------------------------------------------------
+  - id: pcre
+    version: "8.45"
+    repo: pcre/pcre
+    source:
+      type: tarball
+      url: "https://downloads.sourceforge.net/project/pcre/pcre/{version}/pcre-{version}.tar.gz"
+      strip_components: 1
+    build_system: autotools
+    static: true
+    provides: [pcre]
+    configure:
+      flags:
+        - "--enable-static"
+        - "--disable-shared"
+        - "--enable-utf"
+        - "--enable-unicode-properties"
+        - "--disable-cpp"
+        - "--disable-pcregrep-libz"
+        - "--disable-pcregrep-libbz2"
+    notes: "PCRE1 only (ngrep links -lpcre). Keep --disable-cpp: we only need the C API and the C++ wrapper drags in stdc++."
