@@ -36,6 +36,13 @@ deps:
         - "--disable-shared"
         - "--without-shared"
         - "--enable-widec"
+        # Install the wide-char headers straight into $PREFIX/include instead of
+        # $PREFIX/include/ncursesw. Without this, every plain
+        # AC_CHECK_HEADERS([ncurses.h]) fails (there is no top-level ncurses.h),
+        # which is what broke ncdu, nethogs and mtr on the first CI run. Tools
+        # that use pkg-config still work because -I$PREFIX/include is in CPPFLAGS
+        # for every build.
+        - "--enable-overwrite"
         - "--enable-pc-files"
         - "--with-pkg-config-libdir=$PREFIX/lib/pkgconfig"
         - "--without-debug"
@@ -123,16 +130,36 @@ deps:
     static: true
     provides: [openssl, libcrypto, libssl]
     configure:
-      command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-aarch64"
+      # TWO non-obvious traps, both verified against openssl 3.5.4's Configure:
+      #
+      # 1) `LDFLAGS= ./Configure` is mandatory. This engine exports
+      #    LDFLAGS="-static -L$PREFIX/lib", and Configure contains:
+      #        if (grep { /(^|\s)-static(\s|$)/ } @{$config{LDFLAGS}}) {
+      #            disable('static', 'pic', 'threads');
+      #        }
+      #    i.e. a bare -static silently turns THREAD SUPPORT OFF. The resulting
+      #    configuration.h lacks OPENSSL_THREADS, and stunnel then dies with
+      #    "OpenSSL library compiled without thread support". Clearing LDFLAGS for
+      #    this one command keeps threads on; the library is still static because
+      #    no-shared means .a is the only artefact.
+      #
+      # 2) `--libdir=lib` is mandatory. The linux-* targets default to lib64 on
+      #    64-bit ABIs, but the engine only ever adds -L$PREFIX/lib and
+      #    PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig, so ldns's `-lcrypto` link test
+      #    failed ("OpenSSL found ... but version 0.9.7 or higher is required").
+      #
+      # Configure also has NO out-of-tree support, hence the script driver: deps
+      # are always built in-source, so BUILD_DIR == SRC_DIR here.
+      command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-aarch64"
     make:
       targets: ["build_sw"]
       install_target: "install_sw"
     abi_overrides:
-      arm64-v8a:   { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-aarch64" } }
-      armeabi-v7a: { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-armv4" } }
-      x86_64:      { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-x86_64" } }
-      x86:         { configure: { command: "./Configure no-shared no-tests no-legacy no-asm no-docs --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-elf" } }
-    notes: "`no-asm` trades ~10-20% AES/SHA throughput for a build that needs no per-ABI perlasm/nasm wiring; drop it per-ABI once the pipeline is green. Phase 2 item — failures here must not block the Phase 1 tools."
+      arm64-v8a:   { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-aarch64" } }
+      armeabi-v7a: { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-armv4" } }
+      x86_64:      { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-x86_64" } }
+      x86:         { configure: { command: "LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-elf" } }
+    notes: "`no-asm` trades ~10-20% AES/SHA throughput for a build with no per-ABI perlasm/nasm wiring. Consumers: drill (libcrypto/libssl) and stunnel. Both need LDFLAGS cleared and --libdir=lib (see configure)."
 
   # ---------------------------------------------------------------------------
   # pcre (PCRE1) — REQUIRED by ngrep only. PCRE2 is a different, incompatible

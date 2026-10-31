@@ -364,6 +364,12 @@ tools:
     # Only the genuinely opt-out features are listed below.
     configure:
       command: "./configure --disable-native --disable-gfapi --disable-rados --disable-rbd --disable-http --disable-libzbc --disable-pmem --disable-xnvme"
+    # Build ONLY the `fio` target. `make all` also builds t/*.c and u/*.c — the
+    # test harness — and t/read-to-pipe-async.c calls log_err() without including
+    # its prototype, which is a hard error under clang's C99 mode. `install`
+    # depends on $(PROGS) (= fio) only, so nothing downstream is lost.
+    make:
+      targets: ["fio"]
     artifacts:
       - path: "fio"
         bin_name: "fio"
@@ -371,7 +377,7 @@ tools:
     smoke:
       args: ["--version"]
       contains: "fio-3.36"
-    notes: "libaio is absent on musl/Android by design; posix-aio + sync engines remain. Risky probe set — first candidate if a job goes red."
+    notes: "Built with `make fio` (not `all`) to skip the t/ test harness, which does not compile under modern clang. libaio is absent on musl/Android by design; posix-aio + sync engines remain."
 
   # ---------------------------------------------------------------------------
   # memtester — memory stability check. Plain Makefile, but it does NOT honour
@@ -453,6 +459,13 @@ tools:
     build_system: autotools
     tier: 0
     bin: pv
+    # pv's build merges objects with `$(LD) $(LDFLAGS)` where LDFLAGS = -r (a
+    # relocatable link). LD is never assigned in pv's makefiles, so it falls back
+    # to make's builtin `ld` — the HOST linker — which then refuses i386/arm
+    # objects with "incompatible with i386:x86-64 output". Pointing LD at the zig
+    # driver fixes it: clang accepts `-r` and dispatches to lld for the target.
+    env:
+      LD: "zig cc -target $ZIG_TARGET"
     configure:
       flags:
         - "--disable-shared"
@@ -461,7 +474,7 @@ tools:
     smoke:
       args: ["--version"]
       contains: "1.6.20"
-    notes: "1.6.x line for autotools; 1.9+ requires meson and is not worth the extra driver surface."
+    notes: "1.6.x line for autotools; 1.9+ requires meson. LD must be overridden (see env) or every non-host ABI fails at the final relocatable link."
 
   # ---------------------------------------------------------------------------
   # ncdu — interactive disk usage (finds what is eating /data). 1.x is C +
@@ -580,6 +593,14 @@ tools:
     build_system: autotools
     tier: 0
     bin: nload
+    hooks:
+      # nload 0.7.4 ships a config.sub from 2004 that predates musl, so configure
+      # dies with "config.sub aarch64-linux-musl failed" before compiling a line.
+      # Overwrite config.sub/config.guess with the host's modern copies (shipped
+      # by autotools-dev, which autoconf/automake pull in). Hooks run with
+      # cwd=SRC_DIR and before ./configure, so this wins.
+      pre_configure:
+        - 'for f in config.sub config.guess; do s=$(find /usr/share -name "$f" -print -quit); if [ -n "$s" ]; then cp -f "$s" "$f"; fi; done; true'
     configure:
       flags:
         - "--disable-shared"
@@ -590,7 +611,7 @@ tools:
       args: ["-h"]
       expect_exit: 0
       contains: "nload version 0.7.4"
-    notes: "Unrooted-friendly (reads /proc/net/dev). Upstream www.rofl0r.de no longer resolves, so the Debian pristine orig tarball is used (verified 200)."
+    notes: "Unrooted-friendly (reads /proc/net/dev). Upstream www.rofl0r.de no longer resolves, so the Debian pristine orig tarball is used (verified 200). The Debian orig tarball is also much older than a git checkout, hence the config.sub hook."
 
   # ---------------------------------------------------------------------------
   # nethogs — per-process bandwidth. C++ (zig c++), libpcap + ncurses. Kept
@@ -649,10 +670,26 @@ tools:
         - "--disable-xxhash"
         - "--with-included-popt"
         - "--disable-md2man"
+    # x86_64 only: clang (zig 0.16) CRASHES with SIGSEGV (exit 139) while
+    # compiling simd-checksum-x86_64.c, which only exists on that ABI. Nothing
+    # else is affected, so the rolling-checksum SIMD path is turned off for this
+    # one target instead of for the whole matrix. Lists are replaced wholesale by
+    # abi_overrides, hence the full flag set is repeated here.
+    abi_overrides:
+      x86_64:
+        configure:
+          flags:
+            - "--disable-openssl"
+            - "--disable-lz4"
+            - "--disable-zstd"
+            - "--disable-xxhash"
+            - "--with-included-popt"
+            - "--disable-md2man"
+            - "--disable-roll-simd"
     smoke:
       args: ["--version"]
       contains: "version 3.3.0"
-    notes: "No ssh transport (no openssl/libssh); use it over local paths or rsync:// against an rsyncd."
+    notes: "No ssh transport (no openssl/libssh); use it over local paths or rsync:// against an rsyncd. x86_64 drops --enable-roll-simd to dodge a zig/clang codegen crash."
 
   # ---------------------------------------------------------------------------
   # dropbear — small SSH server/client (dropbear, dbclient, dropbearkey, scp).
@@ -676,11 +713,19 @@ tools:
     configure:
       command: "./configure --prefix=\"$PREFIX\" --host=\"$ZIG_TARGET\" --disable-zlib --disable-syslog --disable-utmp --disable-wtmp --disable-lastlog --disable-utmpx --disable-wtmpx --disable-pututline --disable-pututxline"
     # All nine --disable-* switches were checked against dropbear's generated
-    # configure. --host flips it into cross mode (no run-time probes); PROGRAMS
-    # is a make variable, so it belongs in make.args, not in the configure step.
+    # configure. --host flips it into cross mode (no run-time probes); PROGRAMS is
+    # a make variable, so it belongs in make.args, not in the configure step.
+    #
+    # Only dropbear + dbclient are staged. The engine applies ONE smoke assertion
+    # to every artifact of a tool, and only these two implement -V (verified in
+    # svr-runopts.c / cli-runopts.c: both do `case 'V': print_version()`). Shipping
+    # dropbearkey/dropbearconvert/scp would make the job red on a smoke mismatch
+    # that says nothing about the build. Nothing is really lost: `dropbear -R`
+    # generates host keys on first start, and rsync (this manifest) is the better
+    # file-transfer path than scp.
     make:
       args:
-        - "PROGRAMS=dropbear dbclient dropbearkey dropbearconvert scp"
+        - "PROGRAMS=dropbear dbclient"
         - "STATIC=1"
     artifacts:
       - path: "dropbear"
@@ -689,16 +734,10 @@ tools:
       - path: "dbclient"
         bin_name: "dbclient"
         required: true
-      - path: "dropbearkey"
-        bin_name: "dropbearkey"
-        required: true
-      - path: "scp"
-        bin_name: "scp"
-        required: false
     smoke:
       args: ["-V"]
       expect_exit: 0
-    notes: "Unproven: the utmp-less configure path. Run with -r /data/local/tmp/dropbear and -R for authorized_keys; root required for :22."
+    notes: "Run `dropbear -R -E -p 2222` to auto-generate host keys and stay in the foreground; root is required to bind :22. Host keys go in $PWD by default."
 
   # ===========================================================================
   # tcping — TCP-level "ping" (connect + RTT/loss). Go, so it is a static
@@ -719,8 +758,12 @@ tools:
     env:
       CGO_ENABLED: "0"
     smoke:
-      args: ["--version"]
+      # tcping uses Go's flag package and defines -v for the version banner;
+      # --version is an undefined flag ("flag provided but not defined: -version")
+      # and exits 1. Verified against the tool's own --help output.
+      args: ["-v"]
       expect_exit: 0
+      contains: "TCPING version"
     notes: "Go build (CGO_ENABLED=0) => zero libc deps, works on any ABI. If the tag is missing, bump both version and source.tag."
 
   # ===========================================================================
@@ -778,6 +821,13 @@ tools:
     build_system: script
     tier: 1
     bin: socat
+    # socat stamps its version banner with BUILD_DATE, which defaults to
+    # `__DATE__ " " __TIME__` — and zig cc promotes -Wdate-time to a hard error, so
+    # the very first object fails. socat's configure honours a BUILD_DATE env var
+    # (added upstream for reproducible builds), which is the sanctioned way out and
+    # is also more reproducible than the default.
+    env:
+      BUILD_DATE: "2026-01-01 00:00:00"
     # The script driver already runs in-source (BUILD_DIR == SRC_DIR), so a plain
     # ./configure is enough; make/make install come from the driver defaults.
     configure:
@@ -785,7 +835,7 @@ tools:
     smoke:
       args: ["-V"]
       contains: "socat version 1.8.0.0"
-    notes: "No openssl/readline (keeps it dependency-free). Upstream is HTTP-only and has no out-of-tree support, which is fine: this driver builds in-tree."
+    notes: "No openssl/readline (keeps it dependency-free). Upstream is HTTP-only and has no out-of-tree support, which is fine: this driver builds in-tree. BUILD_DATE must be set (see env) or -Wdate-time kills the build."
 
   # ---------------------------------------------------------------------------
   # horst — 802.11 channel/neighbour scanner. Reuses libpcap + ncurses.
@@ -814,6 +864,13 @@ tools:
     deps: [ncurses]
     configure: {}
     hooks:
+      pre_configure:
+        # conf_options.c prints `__DATE__`/`__TIME__`, and zig cc promotes
+        # -Wdate-time to an error, so `-v` would never compile. Replace the two
+        # macros with fixed strings: a build timestamp is useless on-device and
+        # non-reproducible anyway.
+        - |
+          sed -i 's/__DATE__, __TIME__/"unknown", "unknown"/' conf_options.c
       pre_build:
         # 1) only ncursesw is built by this repo, upstream links -lncurses.
         # 2) horst's .objdeps.mk rule shells out to the HOST `gcc -MM`; an empty
