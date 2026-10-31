@@ -8,6 +8,7 @@ prefix/
 .zig-cache/
 .zig-global/
 .zig-local/
+.zig-tmp/
 
 # ---- downloaded toolchains / sources ------------------------------------
 zig/

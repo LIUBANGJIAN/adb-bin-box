@@ -1,5 +1,5 @@
-# Release pipeline: a `v*` tag (or a manual run) builds and publishes GitHub
-# Release assets (system_design.md §4.4).
+# Release pipeline: a `v*` tag, a weekly schedule, or a manual run builds and
+# publishes GitHub Release assets (system_design.md §4.4).
 #
 # Behaviour worth knowing:
 #   * one archive per tool (see build/package/package.sh);
@@ -7,13 +7,19 @@
 #     build/package/release_notes.sh — it documents the direct AND the
 #     https://gh-proxy.com/ accelerated download URLs;
 #   * every publish PURGES older releases (keeping only the one being created),
-#     so the Releases page always shows only the newest version.
+#     so the Releases page always shows only the newest version;
+#   * the weekly run (Sunday 20:00 Asia/Shanghai) tags itself with the local
+#     date, e.g. v2026.11.01, and adds -r2/-r3 if that tag already exists.
 name: release
 
 on:
   push:
     tags:
       - "v*"
+  # Weekly build+release. GitHub cron is UTC; 12:00 UTC == 20:00 in Asia/Shanghai,
+  # which is still Sunday in both zones, so the date in the tag is unambiguous.
+  schedule:
+    - cron: "0 12 * * 0"
   workflow_dispatch:
     inputs:
       tag:
@@ -66,6 +72,21 @@ jobs:
             TAG="${GITHUB_REF_NAME}"
           elif [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
+          elif [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            # Weekly run: name the release after the day it was published, using
+            # the local date so it matches "Sunday" for the maintainers rather
+            # than whatever UTC happened to be. A same-day re-run must not fight
+            # over an existing tag, so fall back to -r2, -r3, ... (`ls-remote`
+            # returns non-zero when the tag is absent, which ends the loop).
+            BASE="v$(TZ=Asia/Shanghai date +%Y.%m.%d)"
+            TAG="$BASE"
+            for n in 2 3 4 5 6; do
+              if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+                TAG="${BASE}-r${n}"
+              else
+                break
+              fi
+            done
           else
             TAG="v$(tr -d ' \t\r\n' < VERSION)"
           fi
