@@ -363,7 +363,11 @@ tools:
     # default), so passing --disable-libaio/--disable-libnbd is a hard failure.
     # Only the genuinely opt-out features are listed below.
     configure:
-      command: "./configure --disable-native --disable-gfapi --disable-rados --disable-rbd --disable-http --disable-libzbc --disable-pmem --disable-xnvme"
+      # --prefix is NOT optional here: fio bakes bindir/mandir from it at configure
+      # time, and the engine's `make install prefix=...` override does not reach
+      # $(bindir). Without it the install step tried `install -d /usr/local/bin`
+      # and died with "Operation not permitted".
+      command: "./configure --prefix=\"$PREFIX\" --disable-native --disable-gfapi --disable-rados --disable-rbd --disable-http --disable-libzbc --disable-pmem --disable-xnvme"
     # Build ONLY the `fio` target. `make all` also builds t/*.c and u/*.c — the
     # test harness — and t/read-to-pipe-async.c calls log_err() without including
     # its prototype, which is a hard error under clang's C99 mode. `install`
@@ -565,11 +569,15 @@ tools:
         - "--without-gtk"
     # mtr is a two-binary tool: `mtr` shells out to `mtr-packet` for raw-socket
     # I/O. Staging only `mtr` yields a binary that fails at runtime.
+    #
+    # Both land in $PREFIX/sbin, not $PREFIX/bin: upstream's install rule uses
+    # sbindir because mtr-packet wants setuid/cap_net_raw. Pointing at sbin/ is
+    # less surprising than silently relocating a setuid helper into bin/.
     artifacts:
-      - path: "bin/mtr"
+      - path: "sbin/mtr"
         bin_name: "mtr"
         required: true
-      - path: "bin/mtr-packet"
+      - path: "sbin/mtr-packet"
         bin_name: "mtr-packet"
         required: true
     smoke:
@@ -596,11 +604,18 @@ tools:
     hooks:
       # nload 0.7.4 ships a config.sub from 2004 that predates musl, so configure
       # dies with "config.sub aarch64-linux-musl failed" before compiling a line.
-      # Overwrite config.sub/config.guess with the host's modern copies (shipped
-      # by autotools-dev, which autoconf/automake pull in). Hooks run with
-      # cwd=SRC_DIR and before ./configure, so this wins.
+      # Overwrite config.sub/config.guess with a modern copy; several distro
+      # layouts are tried because the canonical one lives in autotools-dev, which
+      # is only a Recommends of autoconf. Bails out silently if none is found —
+      # configure will then fail loudly on its own terms.
       pre_configure:
-        - 'for f in config.sub config.guess; do s=$(find /usr/share -name "$f" -print -quit); if [ -n "$s" ]; then cp -f "$s" "$f"; fi; done; true'
+        - |
+          for f in config.sub config.guess; do
+            for d in /usr/share/misc /usr/share/libtool/build-aux /usr/share/automake-*; do
+              if [ -f "$d/$f" ]; then cp -f "$d/$f" "$f" && break; fi
+            done
+          done
+          true
     configure:
       flags:
         - "--disable-shared"
@@ -633,6 +648,13 @@ tools:
     enabled: true
     deps: [libpcap, ncurses]
     configure: {}
+    hooks:
+      pre_build:
+        # nethogs links `-lncurses` explicitly; this repo only builds the
+        # wide-char ncursesw, so the link step failed with "unable to find static
+        # system library 'ncurses'". Rewrite the flag instead of patching upstream
+        # (same treatment as horst).
+        - 'sed -i "s/-lncurses\b/-lncursesw/g" Makefile'
     make:
       targets: ["nethogs"]
       install_target: ""
@@ -643,7 +665,7 @@ tools:
     smoke:
       args: ["-V"]
       expect_exit: 0
-    notes: "First reddish candidate: C++ cross build unproven. Needs root for packet capture."
+    notes: "C++ cross build via zig c++ (one of the riskier ones). Links ncursesw via a Makefile hook. Needs root for packet capture."
 
   # ---------------------------------------------------------------------------
   # rsync — incremental sync between phone and host. Only zlib is kept; openssl
