@@ -49,6 +49,10 @@
       "properties": {
         "type": { "enum": ["tarball", "git", "local"] },
         "url": { "type": "string" },
+        "mirror": {
+          "description": "Second URL tried when `url` keeps failing or keeps returning an unreadable body (e.g. a 200 + HTML error page). Same {version} templating as url.",
+          "type": "string"
+        },
         "tag": { "type": "string" },
         "strip_components": { "type": "integer", "minimum": 0 }
       }

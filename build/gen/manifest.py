@@ -235,9 +235,13 @@ def normalize_source(raw: Optional[Dict[str, Any]], version: str) -> Dict[str, A
     url = src.get("url")
     if url is not None:
         url = expand_template(str(url), version, tag)
+    mirror = src.get("mirror")
+    if mirror is not None:
+        mirror = expand_template(str(mirror), version, tag)
     return {
         "type": stype,
         "url": url,
+        "mirror": mirror,
         "tag": tag,
         "strip_components": int(src.get("strip_components", DEFAULT_STRIP_COMPONENTS)),
     }
@@ -615,6 +619,7 @@ def emit_shell(
     lines.append(_sh_scalar("BUILD_SYSTEM", spec["build_system"]))
     lines.append(_sh_scalar("TOOL_SOURCE_TYPE", spec["source"]["type"]))
     lines.append(_sh_scalar("TOOL_SOURCE_URL", spec["source"]["url"] or ""))
+    lines.append(_sh_scalar("TOOL_SOURCE_MIRROR", spec["source"]["mirror"] or ""))
     lines.append(_sh_scalar("TOOL_SOURCE_TAG", spec["source"]["tag"] or ""))
     lines.append(_sh_scalar("TOOL_STRIP_COMPONENTS", spec["source"]["strip_components"]))
     lines.append(_sh_scalar("TOOL_FEATURES", ",".join(spec["features"])))
@@ -722,6 +727,7 @@ def emit_dep_shell(
     lines.append(_sh_scalar("DEP_BUILD_SYSTEM", spec["build_system"]))
     lines.append(_sh_scalar("DEP_SOURCE_TYPE", spec["source"]["type"]))
     lines.append(_sh_scalar("DEP_SOURCE_URL", spec["source"]["url"] or ""))
+    lines.append(_sh_scalar("DEP_SOURCE_MIRROR", spec["source"]["mirror"] or ""))
     lines.append(_sh_scalar("DEP_SOURCE_TAG", spec["source"]["tag"] or ""))
     lines.append(_sh_scalar("DEP_STRIP_COMPONENTS", spec["source"]["strip_components"]))
     lines.append(_sh_array("DEP_CONFIGURE_FLAGS", _tokens(spec["configure"]["flags"], mapping)))

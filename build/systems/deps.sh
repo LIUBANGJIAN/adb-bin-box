@@ -84,7 +84,7 @@ log "building dep: system=$BUILD_SYSTEM version=$DEP_VERSION url=$DEP_SOURCE_URL
 
 mkdir -p "$SRC_DIR"
 fetch_source "$DEP_SOURCE_TYPE" "$DEP_SOURCE_URL" "$DEP_SOURCE_TAG" \
-  "$DEP_STRIP_COMPONENTS" "$SRC_DIR" "dep:$DEP_ID"
+  "$DEP_STRIP_COMPONENTS" "$SRC_DIR" "dep:$DEP_ID" "${DEP_SOURCE_MIRROR:-}"
 
 apply_kv DEP_ENV_KV
 setup_zig_env

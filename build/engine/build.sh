@@ -148,7 +148,7 @@ done
 # 2. Fetch the tool source                                                    #
 # --------------------------------------------------------------------------- #
 fetch_source "$TOOL_SOURCE_TYPE" "$TOOL_SOURCE_URL" "$TOOL_SOURCE_TAG" \
-  "$TOOL_STRIP_COMPONENTS" "$SRC_DIR" "$TOOL_ID"
+  "$TOOL_STRIP_COMPONENTS" "$SRC_DIR" "$TOOL_ID" "${TOOL_SOURCE_MIRROR:-}"
 
 # --------------------------------------------------------------------------- #
 # 3. Patches                                                                  #

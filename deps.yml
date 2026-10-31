@@ -65,6 +65,12 @@ deps:
     source:
       type: tarball
       url: "https://zlib.net/fossils/zlib-{version}.tar.gz"
+      # zlib.net is a genuine single point of failure: under the parallel load of
+      # 100 matrix jobs it has twice answered 200 with an ~11 KB HTML error page
+      # for the 1.5 MB tarball, three retries in a row. curl -f cannot see that,
+      # so the fetch layer validates the archive with tar -tf and now also has a
+      # fallback origin (the upstream GitHub release asset, byte-identical).
+      mirror: "https://github.com/madler/zlib/releases/download/v{version}/zlib-{version}.tar.gz"
       strip_components: 1
     build_system: make
     static: true
@@ -173,11 +179,17 @@ deps:
       #    matter which atomics the target has. Reproduced locally in that exact
       #    shape — 4-byte-aligned uint64_t + -mcx16 still fails to link.
       #
-      #    So the x86 build also #defines the builtin to 1: the caller's own
-      #    alignment is fine in practice, and with -mcx16 the 8-byte RMW inlines
-      #    to cmpxchg8b instead of a libcall, leaving nothing undefined. Both
-      #    halves are required; verified together in the same local repro.
-      x86:         { configure: { command: "sed -i '1i #define __atomic_is_lock_free(sz, ptr) 1' crypto/threads_pthread.c && LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-elf -mcx16" } }
+      #    So the x86 build also #defines the builtin — but to 0, not 1. With 0
+      #    every call site takes openssl's pthread-mutex fallback, so the runtime
+      #    behaviour is exactly what a real libatomic would give for a 4-byte
+      #    aligned uint64_t (its __atomic_is_lock_free answers 0 there), while
+      #    -mcx16 is still what makes the *compiled but untaken* atomic branch
+      #    inline to cmpxchg8b instead of leaving a __atomic_*_8 libcall
+      #    undefined. Defining it to 1 also links, but it forces the atomic path
+      #    on a pointer whose alignment clang just told us it cannot trust, and
+      #    stunnel/x86 then died in smoke with SIGSEGV before printing anything.
+      #    Both halves verified in the same local repro.
+      x86:         { configure: { command: "sed -i '1i #define __atomic_is_lock_free(sz, ptr) 0' crypto/threads_pthread.c && LDFLAGS= ./Configure no-shared no-tests no-legacy no-asm no-docs --libdir=lib --prefix=\"$PREFIX\" --openssldir=\"$PREFIX/ssl\" linux-elf -mcx16" } }
     notes: "`no-asm` trades ~10-20% AES/SHA throughput for a build with no per-ABI perlasm/nasm wiring. Consumers: drill (libcrypto/libssl) and stunnel. Both need LDFLAGS cleared and --libdir=lib (see configure)."
 
   # ---------------------------------------------------------------------------

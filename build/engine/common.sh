@@ -141,8 +141,15 @@ clone_source() {
 }
 
 fetch_source() {
-  # fetch_source <type> <url> <tag> <strip> <dest> [<label>]
+  # fetch_source <type> <url> <tag> <strip> <dest> [<label>] [<mirror>]
+  #
+  # <mirror> is an optional second URL tried when <url> keeps failing. Some
+  # origins are single points of failure: zlib.net answered 200 with an ~11 KB
+  # HTML error page on every one of three retries, twice in two different runs,
+  # which turned "the mirror is busy" into a red job. A fallback turns that into
+  # a slow fetch.
   local stype="$1" url="$2" tag="$3" strip="$4" dest="$5" label="${6:-source}"
+  local mirror="${7:-}"
   if [ -d "$dest" ] && [ -n "$(ls -A "$dest" 2>/dev/null || true)" ]; then
     log "$label: source already present at $dest (skip fetch)"
     return 0
@@ -161,31 +168,42 @@ fetch_source() {
       ;;
     tarball | "")
       require_cmd curl
-      local tmp attempt max_attempts ok
+      local tmp cand attempt max_attempts ok cands=("$url")
+      if [ -n "$mirror" ] && [ "$mirror" != "$url" ]; then
+        cands+=("$mirror")
+      fi
       tmp="$(mktemp -t adbbinbox.XXXXXX)"
       max_attempts="${FETCH_ATTEMPTS:-3}"
       ok=0
-      attempt=1
-      while [ "$attempt" -le "$max_attempts" ]; do
-        log "$label: downloading $url (attempt $attempt/$max_attempts)"
-        # Keep a partial/HTML body from being treated as success: validate the
-        # archive itself, not just curl's exit code (see archive_is_readable).
-        if curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 \
-                -o "$tmp" "$url" && archive_is_readable "$tmp"; then
-          ok=1
+      for cand in "${cands[@]}"; do
+        attempt=1
+        while [ "$attempt" -le "$max_attempts" ]; do
+          log "$label: downloading $cand (attempt $attempt/$max_attempts)"
+          # Keep a partial/HTML body from being treated as success: validate the
+          # archive itself, not just curl's exit code (see archive_is_readable).
+          if curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 \
+                  -o "$tmp" "$cand" && archive_is_readable "$tmp"; then
+            ok=1
+            break
+          fi
+          warn "$label: download attempt $attempt failed or produced an unreadable archive"
+          rm -f "$tmp"
+          tmp="$(mktemp -t adbbinbox.XXXXXX)"
+          attempt=$((attempt + 1))
+          if [ "$attempt" -le "$max_attempts" ]; then
+            sleep "$((attempt * 3))"
+          fi
+        done
+        if [ "$ok" -eq 1 ]; then
           break
         fi
-        warn "$label: download attempt $attempt failed or produced an unreadable archive"
-        rm -f "$tmp"
-        tmp="$(mktemp -t adbbinbox.XXXXXX)"
-        attempt=$((attempt + 1))
-        if [ "$attempt" -le "$max_attempts" ]; then
-          sleep "$((attempt * 3))"
+        if [ -n "$mirror" ] && [ "$cand" = "$url" ]; then
+          warn "$label: primary origin exhausted, falling back to mirror"
         fi
       done
       if [ "$ok" -ne 1 ]; then
         rm -f "$tmp"
-        die "$label: could not download a readable archive from $url after $max_attempts attempts"
+        die "$label: could not download a readable archive from ${cands[*]} after $max_attempts attempts each"
       fi
       log "$label: extracting -> $dest (strip=$strip)"
       rm -rf "$dest"
