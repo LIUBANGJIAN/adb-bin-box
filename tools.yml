@@ -958,6 +958,13 @@ tools:
         # conf_options.c is what kept horst red on all four ABIs.
         - |
           sed -i 's/__DATE__/"unknown"/g; s/__TIME__/"unknown"/g' *.c
+        # musl does not declare caddr_t: it lives in <sys/types.h> behind
+        # _GNU_SOURCE/_BSD_SOURCE, and ifctrl-wext.c only pulls in
+        # <sys/ioctl.h> + <sys/socket.h>, neither of which brings that header
+        # along. One cast, one use — use the plain pointer type instead
+        # (capture-pcap.c's u_char is irrelevant: PCAP=0 excludes that file).
+        - |
+          sed -i 's/(caddr_t) \&range/(char *)\&range/' ifctrl-wext.c
       pre_build:
         # 1) only ncursesw is built by this repo, upstream links -lncurses.
         # 2) horst's .objdeps.mk rule shells out to the HOST `gcc -MM`; an empty
