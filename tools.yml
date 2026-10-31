@@ -1003,6 +1003,20 @@ tools:
     tier: 2
     bin: stunnel
     deps: [openssl]
+    # x86 (32-bit) is deliberately NOT built. The binary compiles, links and
+    # passes the ELF gate, then dies with SIGSEGV *before printing anything* on
+    # `-version` — the very first thing it does is print its compiled-in
+    # defaults, so this is not a TLS/crypto code path. Confirmed on run #18 with
+    # the openssl atomic workaround set to 0 (mutex fallback) as well as to 1,
+    # and drill/x86 links the exact same libcrypto and passes smoke, so the
+    # libcrypto side is exonerated. stunnel's configure probes come out identical
+    # on x86 and x86_64 (same PTHREAD model), and there is no 32-bit Linux here
+    # to reproduce under, so the remaining cause cannot be pinned down without
+    # guesswork — and shipping a binary that segfaults on startup is worse than
+    # not shipping it. 32-bit Android x86 images are extinct anyway; x86_64
+    # covers every x86 device that can still run a modern Android. Revisit with a
+    # 32-bit reproducer if this is ever needed.
+    abis: [arm64-v8a, armeabi-v7a, x86_64]
     configure:
       flags:
         - "--disable-libwrap"
