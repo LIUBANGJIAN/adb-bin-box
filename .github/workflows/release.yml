@@ -17,15 +17,27 @@ on:
   push:
     tags:
       - "v*"
-  # Weekly build+release. GitHub cron is UTC; 12:17 UTC == 20:17 in Asia/Shanghai,
-  # which is still Sunday in both zones, so the date in the tag is unambiguous.
+  # Weekly build+release: two shots, both finishing before Monday 08:00 in
+  # Asia/Shanghai.
   #
-  # 17 past the hour, not on the hour: GitHub's scheduler is best-effort and the
-  # top of every hour is its busiest slot — runs scheduled at :00 are the ones
-  # that get delayed by tens of minutes. Anything inside the first minutes of a
-  # delay window still lands on the intended Sunday.
+  #   47 12 * * 0  ->  Sunday 20:47 CST (primary; ~35-50 min build)
+  #   47 19 * * 0  ->  Monday 03:47 CST (backup; ~35-50 min build)
+  #
+  # The backup exists because a single cron is a single point of failure: GitHub
+  # drops or delays scheduled runs often enough that one slot cannot be trusted
+  # (2026-11-01 was missed outright). The second slot only does work if the
+  # first one did not produce the release — the `prepare` job compares the
+  # resolved tag against existing releases and short-circuits otherwise, so the
+  # two slots never publish twice.
+  #
+  # :47, not :00 — the top of the hour is the scheduler's busiest slot.
+  #
+  # The backup fires on Monday in Asia/Shanghai, which is exactly why the tag is
+  # anchored on the most recent Sunday (see "Resolve release tag"): the 03:47
+  # run still publishes v<Sunday>.
   schedule:
-    - cron: "17 12 * * 0"
+    - cron: "47 12 * * 0"
+    - cron: "47 19 * * 0"
   workflow_dispatch:
     inputs:
       tag:
@@ -40,6 +52,11 @@ on:
         description: "Comma-separated ABI subset (empty = all)"
         required: false
         default: ""
+      dry_run:
+        description: "Resolve the tag and matrix, then stop (no build, no release)"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -58,7 +75,9 @@ jobs:
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      base: ${{ steps.tag.outputs.base }}
       version: ${{ steps.tag.outputs.version }}
+      skip: ${{ steps.guard.outputs.skip }}
       matrix: ${{ steps.matrix.outputs.matrix }}
       count: ${{ steps.matrix.outputs.count }}
     steps:
@@ -74,31 +93,32 @@ jobs:
         id: tag
         run: |
           set -euo pipefail
+
+          # The tag a *scheduled* run would use: the date of the most recent
+          # Sunday, so a run that is delayed past midnight (or the Monday 03:47
+          # backup slot) still publishes v<Sunday> instead of v<Monday>.
+          #
+          # Computed unconditionally — a dry run needs it to prove the logic on a
+          # real runner without waiting for the next cron.
+          DOW="$(TZ=Asia/Shanghai date +%u)"          # 1=Mon .. 7=Sun
+          BACK=$(( (DOW - 7 + 7) % 7 ))
+          SCHED_BASE="v$(TZ=Asia/Shanghai date -d "-${BACK} days" +%Y.%m.%d)"
+          echo "base=$SCHED_BASE" >> "$GITHUB_OUTPUT"
+
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             TAG="${GITHUB_REF_NAME}"
           elif [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
           elif [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
-            # Weekly run: name the release after the Sunday it was *scheduled*
-            # for, not the day the runner happened to start.
-            #
-            # GitHub's cron is best-effort — a 12:17 UTC run can sit queued for
-            # hours. Past 16:00 UTC it is already Monday in Asia/Shanghai, so
-            # dating the tag from "now" would publish v<Monday> for a Sunday
-            # build (and the next Sunday would then collide differently).
-            # Anchoring on the most recent Sunday keeps the tag stable for any
-            # delay shorter than a week.
-            #
-            # A same-day re-run must not fight over an existing tag, so fall
-            # back to -r2, -r3, ... (`ls-remote` returns non-zero when the tag
-            # is absent, which ends the loop).
-            DOW="$(TZ=Asia/Shanghai date +%u)"          # 1=Mon .. 7=Sun
-            BACK=$(( (DOW - 7 + 7) % 7 ))
-            BASE="v$(TZ=Asia/Shanghai date -d "-${BACK} days" +%Y.%m.%d)"
-            TAG="$BASE"
+            # Weekly run. A same-release re-run must not fight over an existing
+            # tag, so fall back to -r2, -r3, ... (`ls-remote` returns non-zero
+            # when the tag is absent, which ends the loop). The backup slot never
+            # reaches this, because `prepare` short-circuits when the base tag
+            # already exists.
+            TAG="$SCHED_BASE"
             for n in 2 3 4 5 6; do
               if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-                TAG="${BASE}-r${n}"
+                TAG="${SCHED_BASE}-r${n}"
               else
                 break
               fi
@@ -109,13 +129,42 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "resolved release tag=$TAG version=$VERSION (event=${GITHUB_EVENT_NAME})" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### resolved tag \`$TAG\` (version \`$VERSION\`, event \`${GITHUB_EVENT_NAME}\`)"
+            echo
+            echo "A scheduled run right now would publish \`$SCHED_BASE\`" \
+                 "(weekday $DOW in Asia/Shanghai, stepped back $BACK day(s))."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Idempotency gate for the two weekly slots.
+      #
+      # Only meaningful for `schedule`: a tag push or a manual run is an explicit
+      # instruction and must go through. For the backup cron this is what stops
+      # it from republishing (and thereby purging) the release the primary slot
+      # already made three hours earlier.
+      - name: Skip if this week is already published
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.tag.outputs.base }}"
+          if gh release view "$BASE" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "release \`$BASE\` already exists — this slot is a no-op" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "no release for \`$BASE\` yet — building" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Validate manifests
+        if: steps.guard.outputs.skip != 'true'
         run: python build/gen/manifest.py validate --tools tools.yml --deps deps.yml
 
       - name: Generate matrix
         id: matrix
+        if: steps.guard.outputs.skip != 'true'
         env:
           ABIS: ${{ github.event.inputs.abis }}
           TOOLS: ${{ github.event.inputs.tools }}
@@ -132,6 +181,8 @@ jobs:
   build:
     name: build
     needs: prepare
+    # Skipped when the other weekly slot already published, or on a dry run.
+    if: needs.prepare.outputs.skip != 'true' && github.event.inputs.dry_run != 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -150,6 +201,7 @@ jobs:
   release:
     name: publish release
     needs: [prepare, build]
+    if: needs.prepare.outputs.skip != 'true' && github.event.inputs.dry_run != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
