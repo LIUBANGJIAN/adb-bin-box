@@ -26,6 +26,12 @@ deps:
     source:
       type: tarball
       url: "https://ftp.gnu.org/gnu/ncurses/ncurses-{version}.tar.gz"
+      # ftp.gnu.org is the single origin here and it does time out from GitHub's
+      # runners: 2026-11-01 lost ncdu/x86_64 to four consecutive 30 s connection
+      # timeouts. kernel.org serves a byte-identical copy of the same release.
+      # Same reasoning as zlib's fallback — a lone origin turns "the network had
+      # a bad minute" into a red job, and a red job blocks the whole release.
+      mirror: "https://mirrors.kernel.org/gnu/ncurses/ncurses-{version}.tar.gz"
       strip_components: 1
     build_system: autotools
     static: true
