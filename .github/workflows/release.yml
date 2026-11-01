@@ -130,8 +130,11 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Also print to stdout so `dry_run` runs prove the resolution from the
-          # plain job log, without opening the rendered step summary.
+          # plain job log, without opening the rendered step summary. The clock
+          # line exists to prove TZ=Asia/Shanghai is honoured on the runner —
+          # the Monday 03:47 backup slot depends on it (UTC still Sunday there).
           echo "resolved: tag=$TAG version=$VERSION base=$SCHED_BASE weekday=$DOW back=$BACK event=${GITHUB_EVENT_NAME}"
+          echo "clock: utc=$(date -u '+%F %T %a') cst=$(TZ=Asia/Shanghai date '+%F %T %a')"
           {
             echo "### resolved tag \`$TAG\` (version \`$VERSION\`, event \`${GITHUB_EVENT_NAME}\`)"
             echo
