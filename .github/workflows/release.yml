@@ -8,18 +8,24 @@
 #     https://gh-proxy.com/ accelerated download URLs;
 #   * every publish PURGES older releases (keeping only the one being created),
 #     so the Releases page always shows only the newest version;
-#   * the weekly run (Sunday 20:00 Asia/Shanghai) tags itself with the local
-#     date, e.g. v2026.11.01, and adds -r2/-r3 if that tag already exists.
+#   * the weekly run (Sunday 20:17 Asia/Shanghai) tags itself with the date of
+#     the Sunday it was scheduled for, e.g. v2026.11.01, and adds -r2/-r3 if
+#     that tag already exists.
 name: release
 
 on:
   push:
     tags:
       - "v*"
-  # Weekly build+release. GitHub cron is UTC; 12:00 UTC == 20:00 in Asia/Shanghai,
+  # Weekly build+release. GitHub cron is UTC; 12:17 UTC == 20:17 in Asia/Shanghai,
   # which is still Sunday in both zones, so the date in the tag is unambiguous.
+  #
+  # 17 past the hour, not on the hour: GitHub's scheduler is best-effort and the
+  # top of every hour is its busiest slot — runs scheduled at :00 are the ones
+  # that get delayed by tens of minutes. Anything inside the first minutes of a
+  # delay window still lands on the intended Sunday.
   schedule:
-    - cron: "0 12 * * 0"
+    - cron: "17 12 * * 0"
   workflow_dispatch:
     inputs:
       tag:
@@ -73,12 +79,22 @@ jobs:
           elif [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
           elif [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
-            # Weekly run: name the release after the day it was published, using
-            # the local date so it matches "Sunday" for the maintainers rather
-            # than whatever UTC happened to be. A same-day re-run must not fight
-            # over an existing tag, so fall back to -r2, -r3, ... (`ls-remote`
-            # returns non-zero when the tag is absent, which ends the loop).
-            BASE="v$(TZ=Asia/Shanghai date +%Y.%m.%d)"
+            # Weekly run: name the release after the Sunday it was *scheduled*
+            # for, not the day the runner happened to start.
+            #
+            # GitHub's cron is best-effort — a 12:17 UTC run can sit queued for
+            # hours. Past 16:00 UTC it is already Monday in Asia/Shanghai, so
+            # dating the tag from "now" would publish v<Monday> for a Sunday
+            # build (and the next Sunday would then collide differently).
+            # Anchoring on the most recent Sunday keeps the tag stable for any
+            # delay shorter than a week.
+            #
+            # A same-day re-run must not fight over an existing tag, so fall
+            # back to -r2, -r3, ... (`ls-remote` returns non-zero when the tag
+            # is absent, which ends the loop).
+            DOW="$(TZ=Asia/Shanghai date +%u)"          # 1=Mon .. 7=Sun
+            BACK=$(( (DOW - 7 + 7) % 7 ))
+            BASE="v$(TZ=Asia/Shanghai date -d "-${BACK} days" +%Y.%m.%d)"
             TAG="$BASE"
             for n in 2 3 4 5 6; do
               if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
