@@ -129,6 +129,9 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Also print to stdout so `dry_run` runs prove the resolution from the
+          # plain job log, without opening the rendered step summary.
+          echo "resolved: tag=$TAG version=$VERSION base=$SCHED_BASE weekday=$DOW back=$BACK event=${GITHUB_EVENT_NAME}"
           {
             echo "### resolved tag \`$TAG\` (version \`$VERSION\`, event \`${GITHUB_EVENT_NAME}\`)"
             echo
